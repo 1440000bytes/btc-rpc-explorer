@@ -27,6 +27,7 @@ const coreApi = require("./../app/api/coreApi.js");
 const addressApi = require("./../app/api/addressApi.js");
 const rpcApi = require("./../app/api/rpcApi.js");
 const btcQuotes = require("./../app/coins/btcQuotes.js");
+const walletFingerprintAnalysis = require("./../app/walletFingerprintAnalysis.js");
 
 const forceCsrf = csrfApi({ ignoreMethods: [] });
 
@@ -1436,6 +1437,19 @@ router.get("/tx/:transactionId", asyncHandler(async (req, res, next) => {
 		}
 
 		await utils.awaitPromises(promises);
+
+		await utils.timePromise("tx.walletFingerprintAnalysis", async () => {
+			try {
+				const getblockchaininfo = await coreApi.getBlockchainInfo();
+				const tipHeight = getblockchaininfo ? getblockchaininfo.blocks : -1;
+				const txBlockHeight = (res.locals.result.getblock && res.locals.result.getblock.height) || -1;
+
+				res.locals.walletFingerprintAnalysis = walletFingerprintAnalysis.analyzeTransaction(tx, res.locals.result.txInputs, txBlockHeight, tipHeight);
+
+			} catch (err) {
+				utils.logError("walletFingerprintAnalysis", err);
+			}
+		}, perfResults);
 
 		if (global.specialTransactions && global.specialTransactions[txid]) {
 			let funInfo = global.specialTransactions[txid];
