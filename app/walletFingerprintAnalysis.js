@@ -2,7 +2,8 @@
 
 const WALLETS = [
 	"Bitcoin Core", "Electrum", "Blue Wallet", "Coinbase Wallet",
-	"Exodus Wallet", "Trust Wallet", "Trezor", "Ledger"
+	"Exodus Wallet", "Trust Wallet", "Trezor", "Ledger",
+	"Sparrow", "Bull Bitcoin", "Cake Wallet", "Liana", "Nunchuk", "Wasabi"
 ];
 
 const TYPE_MAP = {
@@ -206,9 +207,9 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight) {
 
 	if (tx.locktime === 0) {
 		add("Anti-fee-sniping", "No (nLockTime = 0)",
-			"Most wallets leave nLockTime at 0, which does not narrow much but rules out the anti-fee-sniping wallets.",
+			"Most wallets leave nLockTime at 0, which does not narrow much but rules out the wallets that always set it (Sparrow and Bull Bitcoin, plus Bitcoin Core and Electrum which set it most of the time).",
 			null);
-		discard("Bitcoin Core", "Electrum");
+		discard("Bitcoin Core", "Electrum", "Sparrow", "Bull Bitcoin");
 	} else {
 		let detail = `nLockTime = ${tx.locktime}`;
 		if (referenceHeight && referenceHeight > 0) {
@@ -217,14 +218,15 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight) {
 		}
 
 		add("Anti-fee-sniping", detail,
-			"nLockTime set near the chain tip is the anti-fee-sniping pattern used by Bitcoin Core and Electrum.",
-			"A non-zero locktime narrows the likely wallet to Bitcoin Core or Electrum.");
-		keepOnly("Bitcoin Core", "Electrum");
+			"nLockTime set near the chain tip is the anti-fee-sniping pattern. Only wallets that do this are possible: Bitcoin Core, Electrum, Sparrow, Bull Bitcoin, Liana, Nunchuk and Wasabi.",
+			"A non-zero locktime narrows the wallet to the anti-fee-sniping set.");
+		keepOnly("Bitcoin Core", "Electrum", "Sparrow", "Bull Bitcoin", "Liana", "Nunchuk", "Wasabi");
 	}
 
 	if (tx.version === 1) {
 		add("nVersion", "1", "Transaction version 1 is used by Trust Wallet, Trezor and Ledger.", null);
-		discard("Bitcoin Core", "Electrum", "Blue Wallet", "Exodus Wallet", "Coinbase Wallet");
+		discard("Bitcoin Core", "Electrum", "Blue Wallet", "Exodus Wallet", "Coinbase Wallet",
+			"Sparrow", "Bull Bitcoin", "Cake Wallet", "Liana", "Nunchuk", "Wasabi");
 	} else if (tx.version === 2) {
 		add("nVersion", "2", "Version 2 rules out the wallets that still emit version-1 transactions (Ledger, Trezor, Trust).", null);
 		discard("Ledger", "Trezor", "Trust Wallet");
@@ -237,16 +239,17 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight) {
 	const onlyNativeSegwitInputs = haveInputData && uniqueTypes(inputs).every((t) => t === "p2wpkh");
 	if (signalsRbf) {
 		add("RBF signaling", "Yes (nSequence < 0xFFFFFFFF)",
-			"Opt-in Replace-By-Fee. Wallets that never signal RBF (Coinbase, Exodus) are ruled out.", null);
-		discard("Coinbase Wallet", "Exodus Wallet");
+			"Opt-in Replace-By-Fee. Wallets that default to no RBF (Coinbase, Exodus, Wasabi) are ruled out.", null);
+		discard("Coinbase Wallet", "Exodus Wallet", "Wasabi");
 		if (haveInputData && !onlyNativeSegwitInputs) {
 			discard("Blue Wallet");
 		}
 	} else {
 		add("RBF signaling", "No (nSequence = 0xFFFFFFFF)",
-			"No RBF opt-in. Bitcoin Core, Electrum, Ledger, Trezor and Trust signal RBF by default and are ruled out. Coinbase and Exodus default to no RBF, and Blue Wallet does too for its legacy, P2SH and taproot wallets (only its native segwit wallet signals RBF).",
+			"No RBF opt-in. The wallets that always signal RBF are ruled out: Bitcoin Core, Electrum, Ledger, Trezor, Trust, Sparrow, Bull Bitcoin, Liana and Nunchuk. Wallets that default to no RBF remain possible: Coinbase, Exodus, Wasabi, Cake (when spending unconfirmed coins), and Blue Wallet for its legacy, P2SH and taproot wallets.",
 			null);
-		discard("Bitcoin Core", "Electrum", "Ledger", "Trezor", "Trust Wallet");
+		discard("Bitcoin Core", "Electrum", "Ledger", "Trezor", "Trust Wallet",
+			"Sparrow", "Bull Bitcoin", "Liana", "Nunchuk");
 		if (onlyNativeSegwitInputs) {
 			discard("Blue Wallet");
 		}
@@ -258,7 +261,8 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight) {
 			add("Input script types", inTypes.join(", "),
 				"Spending more than one address type in one transaction is uncommon; most wallets use a single type.",
 				"Mixing input types both fingerprints the wallet and links otherwise-separate address types to one owner.");
-			discard("Exodus Wallet", "Electrum", "Blue Wallet", "Ledger", "Trezor", "Trust Wallet");
+			discard("Exodus Wallet", "Electrum", "Blue Wallet", "Ledger", "Trezor", "Trust Wallet",
+				"Sparrow", "Liana");
 		} else {
 			add("Input script types", inTypes[0] || "n/a", "All inputs share one script type.", null);
 		}
@@ -276,9 +280,9 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight) {
 		if (sigStats.examined > 0) {
 			if (sigStats.highR > 0) {
 				add("Low-R grinding", `No (${sigStats.highR} of ${sigStats.examined} ECDSA signature(s) have a 33-byte R value)`,
-					"A wallet that grinds for low-R signatures would never produce a high-R one, so a high-R signature rules out the grinding wallets (Bitcoin Core, Electrum).",
+					"A wallet that grinds for low-R signatures would never produce a high-R one, so a high-R signature rules out the grinding wallets (Bitcoin Core, Electrum, Sparrow, Bull Bitcoin, Liana).",
 					null);
-				discard("Bitcoin Core", "Electrum");
+				discard("Bitcoin Core", "Electrum", "Sparrow", "Bull Bitcoin", "Liana");
 			} else {
 				add("Low-R grinding", `All ${sigStats.examined} ECDSA signature(s) are low-R (32-byte R or smaller)`,
 					`A non-grinding wallet still produces a low-R signature about half the time, so this is weak evidence (roughly 1 in ${Math.pow(2, sigStats.examined)}). Only consistent low-R across many signatures, in this transaction and related ones, indicates deliberate grinding (Bitcoin Core, Electrum).`,
@@ -290,8 +294,9 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight) {
 	const outTypes = outputs.map((o) => o.type);
 	if (outTypes.includes("op_return")) {
 		add("OP_RETURN output", "Yes",
-			"This transaction embeds data in an OP_RETURN output, which several consumer wallets never create.", null);
-		discard("Coinbase Wallet", "Exodus Wallet", "Blue Wallet", "Ledger", "Trust Wallet");
+			"This transaction embeds data in an OP_RETURN output, which several wallets never create.", null);
+		discard("Coinbase Wallet", "Exodus Wallet", "Blue Wallet", "Ledger", "Trust Wallet",
+			"Bull Bitcoin", "Liana", "Wasabi");
 	}
 
 	if (outputs.length > 2) {
@@ -328,7 +333,8 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight) {
 			add("Address reuse", "Yes (an output reuses an input address)",
 				"Paying back to an address that was just spent. Most modern wallets avoid this.",
 				"Address reuse directly links transactions and is one of the most damaging privacy leaks.");
-			discard("Coinbase Wallet", "Bitcoin Core", "Electrum", "Blue Wallet", "Ledger", "Trezor");
+			discard("Coinbase Wallet", "Bitcoin Core", "Electrum", "Blue Wallet", "Ledger", "Trezor",
+				"Sparrow", "Bull Bitcoin", "Cake Wallet", "Liana", "Nunchuk", "Wasabi");
 		} else {
 			add("Address reuse", "No", "No input address is reused as an output.", null);
 			discard("Exodus Wallet", "Trust Wallet");
@@ -341,7 +347,8 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight) {
 				"Heuristic change detection (single matching script type / reused address / non-round amount).",
 				"A predictable change position lets an observer separate the payment from the change.");
 			if (!isLast) {
-				discard("Ledger", "Blue Wallet", "Coinbase Wallet");
+				discard("Ledger", "Blue Wallet", "Coinbase Wallet",
+					"Sparrow", "Bull Bitcoin", "Cake Wallet", "Liana", "Wasabi");
 			}
 
 			const changeType = outputs[changeIndex].type;

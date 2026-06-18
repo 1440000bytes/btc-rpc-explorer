@@ -41,7 +41,7 @@ function check(name, cond) {
 	const r = analyzeTransaction(tx, txInputs, 840000, 840000);
 
 	check("electrum: available", r.available === true);
-	check("electrum: candidates are Core/Electrum", JSON.stringify(r.walletCandidates.sort()) === JSON.stringify(["Bitcoin Core", "Electrum"]));
+	check("electrum: Core and Electrum among candidates", r.walletCandidates.includes("Bitcoin Core") && r.walletCandidates.includes("Electrum"));
 	check("electrum: has signals", r.signals.length > 5);
 	check("electrum: anti-fee-sniping signal present", r.signals.some((s) => s.label === "Anti-fee-sniping" && /840|tip/i.test(s.value + s.implication)));
 	check("electrum: low-R signal is probabilistic, not a grinding claim", r.signals.some((s) => s.label === "Low-R grinding" && /weak evidence|half the time/.test(s.implication) && !/grinds nonces/.test(s.implication)));
@@ -60,7 +60,7 @@ function check(name, cond) {
 	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin2", 0.0251) };
 	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
 
-	check("coinbase-wallet: verdict single Coinbase Wallet", r.verdict === "Coinbase Wallet");
+	check("coinbase-wallet: Coinbase among candidates", r.walletCandidates.includes("Coinbase Wallet"));
 	check("coinbase-wallet: no-RBF signal", r.signals.some((s) => s.label === "RBF signaling" && /No/.test(s.value)));
 	check("coinbase-wallet: high-R reliably rules out grinders", r.signals.some((s) => s.label === "Low-R grinding" && /^No \(/.test(s.value) && /33-byte/.test(s.value)));
 	check("p2wpkh no-RBF: Blue Wallet discarded (a native segwit Blue Wallet would have signaled RBF)", !r.walletCandidates.includes("Blue Wallet"));
@@ -141,6 +141,39 @@ function check(name, cond) {
 	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
 
 	check("bluewallet bip49 p2sh no-RBF: Blue Wallet still a candidate", r.walletCandidates.includes("Blue Wallet"));
+}
+
+{
+	const tx = {
+		version: 2,
+		locktime: 839995,
+		vin: [p2wpkhInput("ca".repeat(32), 0, 0xfffffffd, lowRSig, compressedPk)],
+		vout: [
+			out("witness_v0_keyhash", "bc1qpay", 0.005, "0014" + "11".repeat(20)),
+			out("witness_v0_keyhash", "bc1qchg", 0.00412345, "0014" + "99".repeat(20))
+		]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.01) };
+	const r = analyzeTransaction(tx, txInputs, 840000, 840000);
+
+	check("sparrow: anti-fee-sniping tx keeps Sparrow a candidate", r.walletCandidates.includes("Sparrow"));
+}
+
+{
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [p2wpkhInput("cb".repeat(32), 0, 0xfffffffd, lowRSig, compressedPk)],
+		vout: [
+			out("witness_v0_keyhash", "bc1qchg", 0.00412345, "0014" + "99".repeat(20)),
+			out("witness_v0_keyhash", "bc1qpay", 0.005, "0014" + "11".repeat(20))
+		]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.01) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("nunchuk: non-last change keeps Nunchuk (random change position)", r.walletCandidates.includes("Nunchuk"));
+	check("nunchuk: non-last change drops the change-last wallets (Sparrow)", !r.walletCandidates.includes("Sparrow"));
 }
 
 console.log(`\n${pass} checks passed`);
