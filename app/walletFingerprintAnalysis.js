@@ -234,15 +234,22 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight) {
 	}
 
 	const signalsRbf = inputs.some((i) => i.sequence != null && i.sequence < 0xffffffff);
+	const onlyNativeSegwitInputs = haveInputData && uniqueTypes(inputs).every((t) => t === "p2wpkh");
 	if (signalsRbf) {
 		add("RBF signaling", "Yes (nSequence < 0xFFFFFFFF)",
 			"Opt-in Replace-By-Fee. Wallets that never signal RBF (Coinbase, Exodus) are ruled out.", null);
 		discard("Coinbase Wallet", "Exodus Wallet");
+		if (haveInputData && !onlyNativeSegwitInputs) {
+			discard("Blue Wallet");
+		}
 	} else {
 		add("RBF signaling", "No (nSequence = 0xFFFFFFFF)",
-			"No RBF opt-in. Among the profiled wallets only Coinbase and Exodus default to this.",
-			"Defaulting to non-RBF is itself a distinguishing signal.");
-		discard("Bitcoin Core", "Electrum", "Blue Wallet", "Ledger", "Trezor", "Trust Wallet");
+			"No RBF opt-in. Bitcoin Core, Electrum, Ledger, Trezor and Trust signal RBF by default and are ruled out. Coinbase and Exodus default to no RBF, and Blue Wallet does too for its legacy, P2SH and taproot wallets (only its native segwit wallet signals RBF).",
+			null);
+		discard("Bitcoin Core", "Electrum", "Ledger", "Trezor", "Trust Wallet");
+		if (onlyNativeSegwitInputs) {
+			discard("Blue Wallet");
+		}
 	}
 
 	const inTypes = uniqueTypes(inputs);

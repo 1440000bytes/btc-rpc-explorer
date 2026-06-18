@@ -63,6 +63,7 @@ function check(name, cond) {
 	check("coinbase-wallet: verdict single Coinbase Wallet", r.verdict === "Coinbase Wallet");
 	check("coinbase-wallet: no-RBF signal", r.signals.some((s) => s.label === "RBF signaling" && /No/.test(s.value)));
 	check("coinbase-wallet: high-R reliably rules out grinders", r.signals.some((s) => s.label === "Low-R grinding" && /^No \(/.test(s.value) && /33-byte/.test(s.value)));
+	check("p2wpkh no-RBF: Blue Wallet discarded (a native segwit Blue Wallet would have signaled RBF)", !r.walletCandidates.includes("Blue Wallet"));
 }
 
 {
@@ -110,6 +111,36 @@ function check(name, cond) {
 
 	check("taproot-only: available", r.available === true);
 	check("taproot-only: no low-R signal (no ECDSA sigs examined)", !r.signals.some((s) => s.label === "Low-R grinding"));
+}
+
+{
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [{ txid: "ba".repeat(32), vout: 0, sequence: 0xffffffff, scriptSig: { asm: lowRSig + " " + compressedPk }, txinwitness: [] }],
+		vout: [
+			out("pubkeyhash", "1pay", 0.02, "76a914" + "22".repeat(20) + "88ac"),
+			out("pubkeyhash", "1chg", 0.00499999, "76a914" + "33".repeat(20) + "88ac")
+		]
+	};
+	const txInputs = { 0: prevout("pubkeyhash", "1in", 0.0251) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("bluewallet legacy p2pkh no-RBF: Blue Wallet still a candidate", r.walletCandidates.includes("Blue Wallet"));
+	check("bluewallet legacy p2pkh no-RBF: RBF text mentions Blue Wallet", r.signals.some((s) => s.label === "RBF signaling" && /Blue Wallet/.test(s.implication)));
+}
+
+{
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [{ txid: "bb".repeat(32), vout: 0, sequence: 0xffffffff, scriptSig: { asm: "" }, txinwitness: [lowRSig, compressedPk] }],
+		vout: [out("scripthash", "3pay", 0.01, "a914" + "44".repeat(20) + "87")]
+	};
+	const txInputs = { 0: prevout("scripthash", "3in", 0.02) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("bluewallet bip49 p2sh no-RBF: Blue Wallet still a candidate", r.walletCandidates.includes("Blue Wallet"));
 }
 
 console.log(`\n${pass} checks passed`);
