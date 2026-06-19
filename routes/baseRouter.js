@@ -1444,7 +1444,19 @@ router.get("/tx/:transactionId", asyncHandler(async (req, res, next) => {
 				const tipHeight = getblockchaininfo ? getblockchaininfo.blocks : -1;
 				const txBlockHeight = (res.locals.result.getblock && res.locals.result.getblock.height) || -1;
 
-				res.locals.walletFingerprintAnalysis = walletFingerprintAnalysis.analyzeTransaction(tx, res.locals.result.txInputs, txBlockHeight, tipHeight);
+				const fetchTxWithInputs = async (linkedTxid) => {
+					const linked = await coreApi.getRawTransactionsWithInputs([linkedTxid], -1);
+					return { tx: linked.transactions[0], txInputs: linked.txInputsByTransaction[linkedTxid] || {} };
+				};
+
+				let extraSignatures = { low: 0, high: 0, linkedTxids: [] };
+				try {
+					extraSignatures = await walletFingerprintAnalysis.gatherLinkedSignatures(tx, res.locals.result.txInputs, fetchTxWithInputs, 4);
+				} catch (graphErr) {
+					utils.logError("walletFingerprintAnalysisGraph", graphErr);
+				}
+
+				res.locals.walletFingerprintAnalysis = walletFingerprintAnalysis.analyzeTransaction(tx, res.locals.result.txInputs, txBlockHeight, tipHeight, extraSignatures);
 
 			} catch (err) {
 				utils.logError("walletFingerprintAnalysis", err);

@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("assert");
-const { analyzeTransaction } = require("./walletFingerprintAnalysis.js");
+const { analyzeTransaction, gatherLinkedSignatures } = require("./walletFingerprintAnalysis.js");
 
 const lowRSig = "3044" + "0220" + "aa".repeat(32) + "0220" + "aa".repeat(32) + "01";
 const highRSig = "3045" + "0221" + "bb".repeat(33) + "0220" + "bb".repeat(32) + "01";
@@ -176,4 +176,68 @@ function check(name, cond) {
 	check("nunchuk: non-last change drops the change-last wallets (Sparrow)", !r.walletCandidates.includes("Sparrow"));
 }
 
-console.log(`\n${pass} checks passed`);
+{
+	const tx = {
+		version: 2,
+		locktime: 839995,
+		vin: [p2wpkhInput("da".repeat(32), 0, 0xfffffffd, lowRSig, compressedPk)],
+		vout: [
+			out("witness_v0_keyhash", "bc1qpay", 0.005, "0014" + "11".repeat(20)),
+			out("witness_v0_keyhash", "bc1qchg", 0.00412345, "0014" + "99".repeat(20))
+		]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.01) };
+	const extra = { low: 6, high: 0, linkedTxids: ["a", "b", "c", "d", "e", "f"] };
+	const r = analyzeTransaction(tx, txInputs, 840000, 840000, extra);
+
+	check("compound strong-low: low-R signal becomes strong evidence", r.signals.some((s) => s.label === "Low-R grinding" && /strong evidence/.test(s.implication) && /linked transaction/.test(s.value)));
+	check("compound strong-low: a non-grinder (Nunchuk) is ruled out", !r.walletCandidates.includes("Nunchuk"));
+	check("compound strong-low: a grinder (Sparrow) survives", r.walletCandidates.includes("Sparrow"));
+}
+
+{
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [p2wpkhInput("db".repeat(32), 0, 0xfffffffd, lowRSig, compressedPk)],
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.01, "0014" + "11".repeat(20))]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
+	const extra = { low: 3, high: 1, linkedTxids: ["a", "b", "c", "d"] };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002, extra);
+
+	check("compound high-R from linked tx rules out grinders", r.signals.some((s) => s.label === "Low-R grinding" && /^No \(/.test(s.value)) && !r.walletCandidates.includes("Sparrow"));
+}
+
+(async () => {
+	const pk = compressedPk;
+	const chainOut = [
+		out("witness_v0_keyhash", "bc1qpay", 0.005, "0014" + "11".repeat(20)),
+		out("witness_v0_keyhash", "bc1qchg", 0.00412345, "0014" + "99".repeat(20))
+	];
+	const parentTxid = "ee".repeat(32);
+	const gpTxid = "ff".repeat(32);
+	const unknownTxid = "12".repeat(32);
+
+	const parentTx = { txid: parentTxid, vin: [{ txid: gpTxid, vout: 1, txinwitness: [lowRSig, pk], scriptSig: { asm: "" } }], vout: chainOut };
+	const gpTx = { txid: gpTxid, vin: [{ txid: unknownTxid, vout: 1, txinwitness: [lowRSig, pk], scriptSig: { asm: "" } }], vout: chainOut };
+	const chainInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
+
+	const fetcher = async (txid) => {
+		if (txid === parentTxid) return { tx: parentTx, txInputs: chainInputs };
+		if (txid === gpTxid) return { tx: gpTx, txInputs: chainInputs };
+		return null;
+	};
+
+	const startTx = { txid: "aa".repeat(32), vin: [{ txid: parentTxid, vout: 1, txinwitness: [lowRSig, pk], scriptSig: { asm: "" } }], vout: chainOut };
+	const startInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
+
+	const r = await gatherLinkedSignatures(startTx, startInputs, fetcher, 4);
+	check("graph walk: follows the 2-hop self-change chain", r.linkedTxids.length === 2);
+	check("graph walk: collects low-R sigs from linked txs", r.low === 2 && r.high === 0);
+
+	const none = await gatherLinkedSignatures(startTx, startInputs, null, 4);
+	check("graph walk: no fetcher returns empty", none.linkedTxids.length === 0);
+
+	console.log(`\n${pass} checks passed`);
+})();

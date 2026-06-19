@@ -3,6 +3,8 @@
 const CATALOG = require("./walletFingerprints.json");
 const WALLETS = Object.keys(CATALOG.wallets);
 
+const STRONG_LOWR_SIGS = 6;
+
 const TYPE_MAP = {
 	"pubkeyhash": "p2pkh",
 	"scripthash": "p2sh",
@@ -231,6 +233,9 @@ function matchCatalog(f) {
 		if (f.haveInputData && f.lowR === "high" && p.low_r === "always") {
 			return false;
 		}
+		if (f.haveInputData && f.lowR === "strong_low" && p.low_r === "no") {
+			return false;
+		}
 
 		if (f.opReturn && p.op_return === "no") {
 			return false;
@@ -269,7 +274,7 @@ function matchCatalog(f) {
 	});
 }
 
-function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight) {
+function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, extraSignatures) {
 	if (!tx || !tx.vin || !tx.vout || (tx.vin[0] && tx.vin[0].coinbase)) {
 		return { available: false };
 	}
@@ -352,15 +357,28 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight) {
 		}
 
 		const sigStats = ecdsaSignatureStats(inputs);
-		facts.lowR = sigStats.examined > 0 ? (sigStats.highR > 0 ? "high" : "low") : "none";
-		if (sigStats.examined > 0) {
-			if (sigStats.highR > 0) {
-				add("Low-R grinding", `No (${sigStats.highR} of ${sigStats.examined} ECDSA signature(s) have a 33-byte R value)`,
+		const linked = extraSignatures || { low: 0, high: 0, linkedTxids: [] };
+		const linkedCount = linked.linkedTxids ? linked.linkedTxids.length : 0;
+		const totalHigh = sigStats.highR + (linked.high || 0);
+		const totalLow = sigStats.lowR + (linked.low || 0);
+		const totalExamined = totalLow + totalHigh;
+		const across = linkedCount > 0 ? ` across this transaction and ${linkedCount} linked transaction(s)` : "";
+
+		if (totalExamined > 0) {
+			if (totalHigh > 0) {
+				facts.lowR = "high";
+				add("Low-R grinding", `No (${totalHigh} of ${totalExamined} ECDSA signature(s)${across} have a 33-byte R value)`,
 					"A wallet that grinds for low-R signatures would never produce a high-R one, so a high-R signature rules out the grinding wallets (Bitcoin Core, Electrum, Sparrow, Bull Bitcoin, Liana).",
 					null);
+			} else if (totalExamined >= STRONG_LOWR_SIGS) {
+				facts.lowR = "strong_low";
+				add("Low-R grinding", `Yes (all ${totalExamined} ECDSA signature(s)${across} are low-R)`,
+					`The chance of ${totalExamined} low-R signatures occurring by luck is about 1 in ${Math.pow(2, totalExamined)}, so this is strong evidence of deliberate low-R grinding (Bitcoin Core, Electrum, Sparrow, Bull Bitcoin, Liana).`,
+					null);
 			} else {
-				add("Low-R grinding", `All ${sigStats.examined} ECDSA signature(s) are low-R (32-byte R or smaller)`,
-					`A non-grinding wallet still produces a low-R signature about half the time, so this is weak evidence (roughly 1 in ${Math.pow(2, sigStats.examined)}). Only consistent low-R across many signatures, in this transaction and related ones, indicates deliberate grinding (Bitcoin Core, Electrum).`,
+				facts.lowR = "low";
+				add("Low-R grinding", `All ${totalExamined} ECDSA signature(s)${across} are low-R (32-byte R or smaller)`,
+					`A non-grinding wallet still produces a low-R signature about half the time, so this is weak evidence (roughly 1 in ${Math.pow(2, totalExamined)}). Following the change chain to gather more of this wallet's signatures would strengthen or refute it.`,
 					null);
 			}
 		}
@@ -454,7 +472,74 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight) {
 	};
 }
 
+async function findSelfChangeParent(tx, txInputs, fetchTxWithInputs, seen) {
+	const start = normalize(tx, txInputs);
+	if (!start.inputs.every((i) => i.type !== "unknown")) {
+		return null;
+	}
+
+	for (let i = 0; i < tx.vin.length; i++) {
+		const vin = tx.vin[i];
+		if (!vin || vin.coinbase || !vin.txid || seen.has(vin.txid)) {
+			continue;
+		}
+
+		const parent = await fetchTxWithInputs(vin.txid);
+		if (!parent || !parent.tx || !parent.tx.vout) {
+			continue;
+		}
+
+		const parentNorm = normalize(parent.tx, parent.txInputs);
+		if (!parentNorm.inputs.every((p) => p.type !== "unknown")) {
+			continue;
+		}
+
+		const parentChange = getChangeIndex(parentNorm.inputs, parentNorm.outputs);
+		if (parentChange >= 0 && parentChange === vin.vout) {
+			return parent;
+		}
+	}
+
+	return null;
+}
+
+async function gatherLinkedSignatures(startTx, startTxInputs, fetchTxWithInputs, maxHops) {
+	const result = { low: 0, high: 0, linkedTxids: [] };
+	if (typeof fetchTxWithInputs !== "function" || !startTx || !startTx.txid) {
+		return result;
+	}
+
+	const seen = new Set([startTx.txid]);
+	let curTx = startTx;
+	let curInputs = startTxInputs;
+
+	for (let hop = 0; hop < maxHops; hop++) {
+		let parent = null;
+		try {
+			parent = await findSelfChangeParent(curTx, curInputs, fetchTxWithInputs, seen);
+		} catch (err) {
+			break;
+		}
+
+		if (!parent) {
+			break;
+		}
+
+		const stats = ecdsaSignatureStats(normalize(parent.tx, parent.txInputs).inputs);
+		result.low += stats.lowR;
+		result.high += stats.highR;
+		result.linkedTxids.push(parent.tx.txid);
+
+		seen.add(parent.tx.txid);
+		curTx = parent.tx;
+		curInputs = parent.txInputs;
+	}
+
+	return result;
+}
+
 module.exports = {
 	analyzeTransaction,
+	gatherLinkedSignatures,
 	WALLETS
 };
