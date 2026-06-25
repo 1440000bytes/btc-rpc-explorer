@@ -308,7 +308,7 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 		version: tx.version,
 		haveInputData,
 		antiFeeSniping: tx.locktime > 0,
-		rbf: inputs.some((i) => i.sequence != null && i.sequence < 0xffffffff),
+		rbf: inputs.some((i) => i.sequence != null && i.sequence < 0xfffffffe),
 		onlyNativeSegwit: haveInputData && inTypes.every((t) => t === "p2wpkh"),
 		multiType: inTypes.length > 1,
 		compressed: compressedKeysOnly(inputs),
