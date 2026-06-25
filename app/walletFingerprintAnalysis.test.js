@@ -209,6 +209,24 @@ function check(name, cond) {
 	check("compound high-R from linked tx rules out grinders", r.signals.some((s) => s.label === "Low-R grinding" && /^No \(/.test(s.value)) && !r.walletCandidates.includes("Sparrow"));
 }
 
+{
+	const tx = {
+		version: 2,
+		locktime: 839990,
+		vin: [p2wpkhInput("fa".repeat(32), 0, 0xfffffffd, lowRSig, compressedPk)],
+		vout: [
+			out("witness_v0_keyhash", "bc1qchg", 0.00412345, "0014" + "11".repeat(20)),
+			out("witness_v0_keyhash", "bc1qpay", 0.005, "0014" + "99".repeat(20))
+		]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.01) };
+	const r = analyzeTransaction(tx, txInputs, 840000, 840000);
+
+	check("references: RBF signal links to BIP-125", r.signals.some((s) => s.label === "RBF signaling" && s.reference === "https://github.com/bitcoin/bips/blob/master/bip-0125.mediawiki"));
+	check("references: Low-R signal links to Optech topic", r.signals.some((s) => s.label === "Low-R grinding" && s.reference === "https://bitcoinops.org/en/topics/low-r-grinding/"));
+	check("references: every signal has a reference url", r.signals.every((s) => typeof s.reference === "string" && s.reference.startsWith("https://")));
+}
+
 (async () => {
 	const pk = compressedPk;
 	const chainOut = [

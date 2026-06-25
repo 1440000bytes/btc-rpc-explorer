@@ -5,6 +5,22 @@ const WALLETS = Object.keys(CATALOG.wallets);
 
 const STRONG_LOWR_SIGS = 6;
 
+const REFERENCES = {
+	"Anti-fee-sniping": "https://bitcoinops.org/en/topics/fee-sniping/",
+	"nVersion": "https://github.com/bitcoin/bips/blob/master/bip-0068.mediawiki",
+	"RBF signaling": "https://github.com/bitcoin/bips/blob/master/bip-0125.mediawiki",
+	"Input script types": "https://en.bitcoin.it/wiki/Privacy#Wallet_fingerprinting",
+	"Public keys": "https://en.bitcoin.it/wiki/Privacy#Wallet_fingerprinting",
+	"Low-R grinding": "https://bitcoinops.org/en/topics/low-r-grinding/",
+	"OP_RETURN output": "https://en.bitcoin.it/wiki/OP_RETURN",
+	"Outputs": "https://bitcoinops.org/en/topics/payment-batching/",
+	"Output ordering": "https://github.com/bitcoin/bips/blob/master/bip-0069.mediawiki",
+	"Input ordering": "https://github.com/bitcoin/bips/blob/master/bip-0069.mediawiki",
+	"Address reuse": "https://en.bitcoin.it/wiki/Privacy#Address_reuse",
+	"Detected change output": "https://en.bitcoin.it/wiki/Privacy#Change_address_detection",
+	"Change type": "https://en.bitcoin.it/wiki/Privacy#Change_address_detection"
+};
+
 const TYPE_MAP = {
 	"pubkeyhash": "p2pkh",
 	"scripthash": "p2sh",
@@ -447,6 +463,8 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 	}
 
 	const candidates = matchCatalog(facts);
+
+	signals.forEach((s) => { s.reference = REFERENCES[s.label] || null; });
 
 	let verdict;
 	let verdictClass;

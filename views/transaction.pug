@@ -303,6 +303,9 @@ block content
 											td #{signal.value}
 											td
 												| #{signal.implication}
+												if (signal.reference)
+													a.ms-1.text-decoration-none(href=signal.reference, target="_blank", rel="noopener noreferrer", title="Learn more")
+														i.bi-book
 												if (signal.privacy)
 													.text-warning.mt-1
 														i.bi-exclamation-triangle.me-1
