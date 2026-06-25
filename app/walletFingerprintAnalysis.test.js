@@ -227,6 +227,34 @@ function check(name, cond) {
 	check("references: every signal has a reference url", r.signals.every((s) => typeof s.reference === "string" && s.reference.startsWith("https://")));
 }
 
+{
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [p2wpkhInput("ab".repeat(32), 0, 0x80000000, lowRSig, compressedPk)],
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.01, "0014" + "11".repeat(20))]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("nsequence 0x80000000: Blue Wallet kept", r.walletCandidates.includes("Blue Wallet"));
+	check("nsequence 0x80000000: an fd-family wallet (Cake) is ruled out", !r.walletCandidates.includes("Cake Wallet"));
+	check("nsequence signal shows the exact value", r.signals.some((s) => s.label === "nSequence value" && /0x80000000/.test(s.value)));
+}
+
+{
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [p2wpkhInput("ac".repeat(32), 0, 0xfffffffd, lowRSig, compressedPk)],
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.01, "0014" + "11".repeat(20))]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("nsequence 0xfffffffd native-segwit: Blue Wallet ruled out (it uses 0x80000000)", !r.walletCandidates.includes("Blue Wallet"));
+}
+
 (async () => {
 	const pk = compressedPk;
 	const chainOut = [

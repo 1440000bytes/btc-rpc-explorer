@@ -9,6 +9,7 @@ const REFERENCES = {
 	"Anti-fee-sniping": "https://bitcoinops.org/en/topics/fee-sniping/",
 	"nVersion": "https://github.com/bitcoin/bips/blob/master/bip-0068.mediawiki",
 	"RBF signaling": "https://github.com/bitcoin/bips/blob/master/bip-0125.mediawiki",
+	"nSequence value": "https://github.com/bitcoin/bips/blob/master/bip-0125.mediawiki",
 	"Input script types": "https://en.bitcoin.it/wiki/Privacy#Wallet_fingerprinting",
 	"Public keys": "https://en.bitcoin.it/wiki/Privacy#Wallet_fingerprinting",
 	"Low-R grinding": "https://bitcoinops.org/en/topics/low-r-grinding/",
@@ -242,6 +243,13 @@ function matchCatalog(f) {
 			}
 		}
 
+		if (p.nsequence && f.sequences && f.sequences.length > 0) {
+			const allowed = p.nsequence.map((h) => parseInt(h, 16));
+			if (!f.sequences.every((s) => allowed.includes(s))) {
+				return false;
+			}
+		}
+
 		if (f.haveInputData && f.multiType && p.multi_type_vin === "no") {
 			return false;
 		}
@@ -309,6 +317,7 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 		haveInputData,
 		antiFeeSniping: tx.locktime > 0,
 		rbf: inputs.some((i) => i.sequence != null && i.sequence < 0xfffffffe),
+		sequences: Array.from(new Set(inputs.map((i) => i.sequence).filter((s) => s != null))),
 		onlyNativeSegwit: haveInputData && inTypes.every((t) => t === "p2wpkh"),
 		multiType: inTypes.length > 1,
 		compressed: compressedKeysOnly(inputs),
@@ -347,11 +356,18 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 	}
 
 	if (facts.rbf) {
-		add("RBF signaling", "Yes (nSequence < 0xFFFFFFFF)",
+		add("RBF signaling", "Yes (nSequence < 0xFFFFFFFE)",
 			"Opt-in Replace-By-Fee. Wallets that default to no RBF (Coinbase, Exodus, Wasabi) are ruled out.", null);
 	} else {
-		add("RBF signaling", "No (nSequence = 0xFFFFFFFF)",
+		add("RBF signaling", "No (nSequence >= 0xFFFFFFFE)",
 			"No RBF opt-in. The wallets that always signal RBF are ruled out: Bitcoin Core, Electrum, Ledger, Trezor, Trust, Sparrow, Bull Bitcoin, Liana and Nunchuk. Wallets that default to no RBF remain possible: Coinbase, Exodus, Wasabi, Cake (when spending unconfirmed coins), and Blue Wallet for its legacy, P2SH and taproot wallets.",
+			null);
+	}
+
+	if (facts.sequences.length > 0) {
+		const seqHexes = facts.sequences.map((s) => "0x" + s.toString(16).padStart(8, "0"));
+		add("nSequence value", seqHexes.join(", "),
+			"The exact nSequence value is wallet-specific: 0x80000000 is Blue Wallet's native segwit wallet; 0xFFFFFFFD is used by most RBF wallets (Bitcoin Core, Electrum, Sparrow, Liana, Bull Bitcoin, Cake); 0xFFFFFFFF by wallets that default to no RBF (Coinbase, Exodus, Wasabi).",
 			null);
 	}
 
