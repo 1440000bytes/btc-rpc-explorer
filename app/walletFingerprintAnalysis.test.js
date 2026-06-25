@@ -255,6 +255,25 @@ function check(name, cond) {
 	check("nsequence 0xfffffffd native-segwit: Blue Wallet ruled out (it uses 0x80000000)", !r.walletCandidates.includes("Blue Wallet"));
 }
 
+{
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [
+			p2wpkhInput("ea".repeat(32), 0, 0xfffffffd, lowRSig, compressedPk),
+			p2wpkhInput("eb".repeat(32), 0, 0xfffffffd, lowRSig, compressedPk)
+		],
+		vout: [
+			out("witness_v0_keyhash", "bc1qchg", 0.0009, "0014" + "11".repeat(20)),
+			out("witness_v0_keyhash", "bc1qpay", 0.006, "0014" + "99".repeat(20))
+		]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin1", 0.003), 1: prevout("witness_v0_keyhash", "bc1qin2", 0.004) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("UIH: detects change smaller than the smallest input even when both amounts are round", r.signals.some((s) => s.label === "Detected change output" && /index 0/.test(s.value) && /not last/.test(s.value)));
+}
+
 (async () => {
 	const pk = compressedPk;
 	const chainOut = [

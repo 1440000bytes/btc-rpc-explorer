@@ -186,6 +186,20 @@ function getChangeIndex(inputs, outputs) {
 		return sharedAddrIndexes[0];
 	}
 
+	const inputValues = inputs.map((i) => i.valueSat).filter((v) => v != null);
+	if (outputs.length === 2 && inputValues.length === inputs.length && inputValues.length > 0) {
+		const minInput = Math.min(...inputValues);
+		const belowMinInput = [];
+		outputs.forEach((o, idx) => {
+			if (o.valueSat != null && o.valueSat < minInput) {
+				belowMinInput.push(idx);
+			}
+		});
+		if (belowMinInput.length === 1) {
+			return belowMinInput[0];
+		}
+	}
+
 	const nonRoundIndexes = [];
 	outputs.forEach((o, idx) => {
 		if (o.valueSat != null && o.valueSat % 100 !== 0) {
