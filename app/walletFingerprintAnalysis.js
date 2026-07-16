@@ -82,15 +82,35 @@ function uniqueTypes(items) {
 	return Array.from(new Set(items.map((x) => x.type)));
 }
 
+function looksLikePubkey(hex) {
+	if (!hex || /[^0-9a-fA-F]/.test(hex)) {
+		return false;
+	}
+
+	if (hex.length === 66 && (hex.substring(0, 2) === "02" || hex.substring(0, 2) === "03")) {
+		return true;
+	}
+
+	return hex.length === 130 && hex.substring(0, 2) === "04";
+}
+
 function sigAndPubkeyHex(input) {
-	if (input.type === "p2wpkh" && input.witness.length >= 2) {
+	// Single-key witness spend, native (P2WPKH) or nested in P2SH (BIP49): [signature, pubkey]
+	if (input.witness.length === 2 && looksLikePubkey(input.witness[1])) {
 		return { sig: input.witness[0], pubkey: input.witness[1] };
 	}
 
-	if (input.type === "p2pkh" && input.scriptSigAsm) {
-		const parts = input.scriptSigAsm.trim().split(/\s+/);
-		if (parts.length >= 2) {
+	if (input.scriptSigAsm) {
+		const parts = input.scriptSigAsm.trim().split(/\s+/).filter(Boolean);
+
+		// P2PKH: <signature> <pubkey>
+		if (parts.length === 2 && looksLikePubkey(parts[1])) {
 			return { sig: parts[0], pubkey: parts[1] };
+		}
+
+		// P2PK: <signature>
+		if (parts.length === 1 && parts[0].substring(0, 2) === "30") {
+			return { sig: parts[0], pubkey: null };
 		}
 	}
 

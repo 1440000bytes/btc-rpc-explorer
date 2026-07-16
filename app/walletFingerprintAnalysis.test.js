@@ -274,6 +274,47 @@ function check(name, cond) {
 	check("UIH: detects change smaller than the smallest input even when both amounts are round", r.signals.some((s) => s.label === "Detected change output" && /index 0/.test(s.value) && /not last/.test(s.value)));
 }
 
+{
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [{ txid: "fb".repeat(32), vout: 0, sequence: 0xfffffffd, scriptSig: { asm: "" }, txinwitness: [lowRSig, compressedPk] }],
+		vout: [out("scripthash", "3pay", 0.01, "a914" + "44".repeat(20) + "87")]
+	};
+	const txInputs = { 0: prevout("scripthash", "3in", 0.02) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("nested-segwit (P2SH-P2WPKH): low-R signal is now produced", r.signals.some((s) => s.label === "Low-R grinding"));
+	check("nested-segwit (P2SH-P2WPKH): compressed key recognized", r.signals.some((s) => s.label === "Public keys" && /Compressed/.test(s.value)));
+}
+
+{
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [{ txid: "fc".repeat(32), vout: 0, sequence: 0xffffffff, scriptSig: { asm: "" }, txinwitness: [lowRSig, uncompressedPk] }],
+		vout: [out("scripthash", "3x", 0.01, "a914" + "44".repeat(20) + "87")]
+	};
+	const txInputs = { 0: prevout("scripthash", "3in", 0.02) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("nested-segwit uncompressed key: flagged and no candidates", r.signals.some((s) => s.label === "Public keys" && /Uncompressed/.test(s.value)) && r.walletCandidates.length === 0);
+}
+
+{
+	const p2pkSig = lowRSig;
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [{ txid: "fd".repeat(32), vout: 0, sequence: 0xffffffff, scriptSig: { asm: p2pkSig }, txinwitness: [] }],
+		vout: [out("pubkeyhash", "1x", 0.01, "76a914" + "44".repeat(20) + "88ac")]
+	};
+	const txInputs = { 0: prevout("pubkey", "1in", 0.02) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("P2PK input: low-R signal is produced from the bare signature", r.signals.some((s) => s.label === "Low-R grinding"));
+}
+
 (async () => {
 	const pk = compressedPk;
 	const chainOut = [
