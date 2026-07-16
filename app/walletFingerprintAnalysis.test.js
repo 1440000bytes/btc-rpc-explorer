@@ -315,6 +315,47 @@ function check(name, cond) {
 	check("P2PK input: low-R signal is produced from the bare signature", r.signals.some((s) => s.label === "Low-R grinding"));
 }
 
+{
+	const acpSig = "3044" + "0220" + "aa".repeat(32) + "0220" + "aa".repeat(32) + "83";
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [p2wpkhInput("fe".repeat(32), 0, 0xffffffff, acpSig, compressedPk)],
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.01, "0014" + "11".repeat(20))]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("sighash: a non-ALL flag surfaces a Signature hash type signal", r.signals.some((s) => s.label === "Signature hash type" && /ANYONECANPAY/.test(s.value)));
+	check("sighash: signal carries a reference url", r.signals.some((s) => s.label === "Signature hash type" && typeof s.reference === "string" && s.reference.startsWith("https://")));
+}
+
+{
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [{ txid: "ef".repeat(32), vout: 0, sequence: 0xffffffff, scriptSig: { asm: "" }, txinwitness: ["ab".repeat(64) + "83"] }],
+		vout: [out("witness_v1_taproot", "bc1ptr", 0.01, "5120" + "77".repeat(32))]
+	};
+	const txInputs = { 0: prevout("witness_v1_taproot", "bc1pin", 0.02) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("sighash: taproot 65-byte witness with explicit SIGHASH_SINGLE|ANYONECANPAY is surfaced", r.signals.some((s) => s.label === "Signature hash type" && /SINGLE\|ANYONECANPAY/.test(s.value)));
+}
+
+{
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [p2wpkhInput("df".repeat(32), 0, 0xffffffff, lowRSig, compressedPk)],
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.01, "0014" + "11".repeat(20))]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("sighash: a plain SIGHASH_ALL transaction adds no sighash signal", !r.signals.some((s) => s.label === "Signature hash type"));
+}
+
 (async () => {
 	const pk = compressedPk;
 	const chainOut = [

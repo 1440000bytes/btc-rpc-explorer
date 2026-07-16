@@ -13,6 +13,7 @@ const REFERENCES = {
 	"Input script types": "https://en.bitcoin.it/wiki/Privacy#Wallet_fingerprinting",
 	"Public keys": "https://en.bitcoin.it/wiki/Privacy#Wallet_fingerprinting",
 	"Low-R grinding": "https://bitcoinops.org/en/topics/low-r-grinding/",
+	"Signature hash type": "https://en.bitcoin.it/wiki/OP_CHECKSIG",
 	"OP_RETURN output": "https://en.bitcoin.it/wiki/OP_RETURN",
 	"Outputs": "https://bitcoinops.org/en/topics/payment-batching/",
 	"Output ordering": "https://github.com/bitcoin/bips/blob/master/bip-0069.mediawiki",
@@ -115,6 +116,54 @@ function sigAndPubkeyHex(input) {
 	}
 
 	return { sig: null, pubkey: null };
+}
+
+const SIGHASH_NAMES = {
+	0x01: "SIGHASH_ALL",
+	0x02: "SIGHASH_NONE",
+	0x03: "SIGHASH_SINGLE",
+	0x81: "SIGHASH_ALL|ANYONECANPAY",
+	0x82: "SIGHASH_NONE|ANYONECANPAY",
+	0x83: "SIGHASH_SINGLE|ANYONECANPAY"
+};
+
+function sighashName(byte) {
+	return SIGHASH_NAMES[byte] || ("0x" + byte.toString(16));
+}
+
+function sighashOf(input) {
+	// Taproot key-path spend: a single 64-byte (implicit SIGHASH_DEFAULT) or 65-byte witness element
+	if (input.type === "p2tr" && input.witness.length === 1) {
+		const w = input.witness[0];
+		if (w.length === 128) {
+			return "SIGHASH_DEFAULT";
+		}
+		if (w.length === 130) {
+			return sighashName(parseInt(w.substring(128), 16));
+		}
+
+		return null;
+	}
+
+	// Single-key witness spend: the raw DER signature ends with the sighash byte
+	if (input.witness.length === 2 && looksLikePubkey(input.witness[1])) {
+		const wsig = input.witness[0];
+		if (wsig.substring(0, 2) === "30" && wsig.length >= 4) {
+			return sighashName(parseInt(wsig.substring(wsig.length - 2), 16));
+		}
+
+		return null;
+	}
+
+	// Legacy scriptSig: Bitcoin Core renders the sighash type as an annotation, e.g. "[ALL]"
+	if (input.scriptSigAsm) {
+		const m = input.scriptSigAsm.match(/\[([A-Z|]+)\]/);
+		if (m) {
+			return "SIGHASH_" + m[1];
+		}
+	}
+
+	return null;
 }
 
 function compressedKeysOnly(inputs) {
@@ -448,6 +497,14 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 					null);
 			}
 		}
+	}
+
+	const sighashes = Array.from(new Set(inputs.map(sighashOf).filter(Boolean)));
+	const nonStandardSighash = sighashes.filter((s) => s !== "SIGHASH_ALL" && s !== "SIGHASH_DEFAULT");
+	if (nonStandardSighash.length > 0) {
+		add("Signature hash type", sighashes.join(", "),
+			"Most wallets sign every input with SIGHASH_ALL (or SIGHASH_DEFAULT for taproot). A different flag is uncommon and usually indicates a collaborative transaction such as a coinjoin or a PSBT signed across wallets.",
+			"A non-default sighash flag is a strong and unusual fingerprint.");
 	}
 
 	if (facts.opReturn) {
