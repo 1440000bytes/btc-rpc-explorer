@@ -414,7 +414,7 @@ function check(name, cond) {
 		version: 2,
 		locktime: 0,
 		vin: Array.from({ length: 6 }, (_, i) => p2wpkhInput("c7".repeat(32), i, 0xfffffffd, lowRSig, compressedPk)),
-		vout: [out("witness_v0_keyhash", "bc1qx", 0.05, "0014" + "11".repeat(20))]
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.0599, "0014" + "11".repeat(20))]
 	};
 	const txInputs = {};
 	for (let i = 0; i < 6; i++) {
@@ -434,7 +434,7 @@ function check(name, cond) {
 		version: 2,
 		locktime: 0,
 		vin: [p2wpkhInput("c2".repeat(32), 0, 0xfffffffd, highRSig, compressedPk)],
-		vout: [out("witness_v0_keyhash", "bc1qx", 0.01, "0014" + "11".repeat(20))]
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.0199, "0014" + "11".repeat(20))]
 	};
 	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
 	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
@@ -449,7 +449,7 @@ function check(name, cond) {
 		version: 2,
 		locktime: 0,
 		vin: [p2wpkhInput("c3".repeat(32), 0, 0xfffffffd, highRSig, compressedPk)],
-		vout: [out("witness_v0_keyhash", "bc1qx", 0.01, "0014" + "11".repeat(20))]
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.0199, "0014" + "11".repeat(20))]
 	};
 	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
 	const r = analyzeTransaction(tx, txInputs, 600000, 840002);
@@ -477,7 +477,7 @@ function check(name, cond) {
 		version: 2,
 		locktime: 0,
 		vin: [p2wpkhInput("c5".repeat(32), 0, 0xfffffffd, lowRSig.slice(0, -2) + "02", compressedPk)],
-		vout: [out("witness_v0_keyhash", "bc1qx", 0.01, "0014" + "11".repeat(20))]
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.0199, "0014" + "11".repeat(20))]
 	};
 	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
 	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
@@ -491,7 +491,7 @@ function check(name, cond) {
 		version: 2,
 		locktime: 0,
 		vin: [p2wpkhInput("c6".repeat(32), 0, 0xfffffffd, lowRSig, uncompressedPk)],
-		vout: [out("witness_v0_keyhash", "bc1qx", 0.01, "0014" + "11".repeat(20))]
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.0199, "0014" + "11".repeat(20))]
 	};
 	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
 	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
@@ -531,3 +531,87 @@ function check(name, cond) {
 
 	console.log(`\n${pass} checks passed`);
 })();
+
+{
+	// Runes-style OP_RETURN: OP_RETURN OP_13 <18-byte push>, two pushes, so not Trezor
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [p2wpkhInput("d1".repeat(32), 0, 0xfffffffd, lowRSig, compressedPk)],
+		vout: [
+			out("nulldata", null, 0, "6a5d1214011400ff7f818cec82d08bc0a88281d215"),
+			out("witness_v0_keyhash", "bc1qx", 0.0099, "0014" + "11".repeat(20))
+		]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.01) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("op_return: a two-push OP_RETURN rules out Trezor", !r.signerCandidates.includes("Trezor device"));
+	check("op_return: Coldcard and Ledger accept it", r.signerCandidates.includes("Coldcard") && r.signerCandidates.includes("Ledger device"));
+}
+
+{
+	// OP_RETURN over the 83-byte script limit Ledger enforces
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [p2wpkhInput("d2".repeat(32), 0, 0xfffffffd, lowRSig, compressedPk)],
+		vout: [
+			out("nulldata", null, 0, "6a4c96" + "ab".repeat(150)),
+			out("witness_v0_keyhash", "bc1qx", 0.0099, "0014" + "11".repeat(20))
+		]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.01) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("op_return: an oversized OP_RETURN rules out Ledger", !r.signerCandidates.includes("Ledger device"));
+	check("op_return: Coldcard has no size limit and survives", r.signerCandidates.includes("Coldcard"));
+}
+
+{
+	// pay-to-anchor output: Trezor rejects witness v1 with a 2-byte program, Ledger allows it
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [p2wpkhInput("d3".repeat(32), 0, 0xfffffffd, lowRSig, compressedPk)],
+		vout: [
+			out("anchor", "bc1pfeas", 0.00000330, "51024e73"),
+			out("witness_v0_keyhash", "bc1qx", 0.0099, "0014" + "11".repeat(20))
+		]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.01) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("anchor: an anchor output rules out Trezor", !r.signerCandidates.includes("Trezor device"));
+	check("anchor: Ledger accepts undefined segwit programs", r.signerCandidates.includes("Ledger device"));
+}
+
+{
+	// a fee at or above 10 percent of the outputs is refused by Coldcard firmware
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [p2wpkhInput("d4".repeat(32), 0, 0xfffffffd, lowRSig, compressedPk)],
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.008, "0014" + "11".repeat(20))]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.01) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("fee: a 25 percent fee rules out Coldcard", !r.signerCandidates.includes("Coldcard"));
+	check("fee: the reason names the fee ratio", r.signals.some((s) => s.label === "Signing device" && /percent of the outputs/.test(s.implication)));
+}
+
+{
+	// P2PK input: only Coldcard implements bare pubkey spends
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [{ txid: "d5".repeat(32), vout: 0, sequence: 0xfffffffd, scriptSig: { asm: lowRSig }, txinwitness: [] }],
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.0099, "0014" + "11".repeat(20))]
+	};
+	const txInputs = { 0: prevout("pubkey", null, 0.01) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("p2pk: a bare pubkey input rules out Trezor and Ledger", !r.signerCandidates.includes("Trezor device") && !r.signerCandidates.includes("Ledger device"));
+	check("p2pk: Coldcard is the only device that can spend it", r.signerVerdict === "Coldcard not ruled out");
+}

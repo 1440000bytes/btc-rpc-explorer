@@ -204,6 +204,53 @@ function witnessLooksTaproot(input) {
 	return false;
 }
 
+// Walk an OP_RETURN scriptPubKey and report the structure the signing firmwares check:
+// total size, how many pushes it carries, and whether it uses OP_PUSHDATA2/OP_PUSHDATA4.
+function parseOpReturn(scriptHex) {
+	const bytes = [];
+	for (let i = 0; i < scriptHex.length; i += 2) {
+		bytes.push(parseInt(scriptHex.substring(i, i + 2), 16));
+	}
+
+	const result = { scriptBytes: bytes.length, pushes: 0, pushdata2: false, parsed: true };
+	let offset = 1;
+
+	while (offset < bytes.length) {
+		const opcode = bytes[offset++];
+		let dataLen = 0;
+
+		if (opcode <= 75) {
+			dataLen = opcode;
+		} else if (opcode === 0x4c) {
+			dataLen = bytes[offset++];
+		} else if (opcode === 0x4d) {
+			result.pushdata2 = true;
+			dataLen = bytes[offset] + (bytes[offset + 1] << 8);
+			offset += 2;
+		} else if (opcode === 0x4e) {
+			result.pushdata2 = true;
+			dataLen = bytes[offset] + (bytes[offset + 1] << 8) + (bytes[offset + 2] << 16) + (bytes[offset + 3] << 24);
+			offset += 4;
+		} else if (opcode === 0x00 || (opcode >= 0x4f && opcode <= 0x60)) {
+			// OP_0, OP_1NEGATE and OP_1..OP_16 are pushes that carry no following bytes
+			dataLen = 0;
+		} else {
+			result.parsed = false;
+			return result;
+		}
+
+		if (isNaN(dataLen) || offset + dataLen > bytes.length) {
+			result.parsed = false;
+			return result;
+		}
+
+		offset += dataLen;
+		result.pushes++;
+	}
+
+	return result;
+}
+
 function uncompressedKeyOutsideP2pk(inputs) {
 	for (const input of inputs) {
 		if (input.type === "p2pk") {
@@ -426,6 +473,10 @@ function matchCatalog(f) {
 // A signing device only leaves fingerprints in the signatures and in what it refuses
 // to sign, so it is matched on its own facts instead of the wallet catalog. Returns the
 // reason the device is incompatible with this transaction, or null if it is still possible.
+function article(word) {
+	return "aeiou".includes(word.charAt(0)) ? "an" : "a";
+}
+
 function signerEliminationReason(name, f) {
 	const p = CATALOG.signers[name];
 
@@ -444,8 +495,41 @@ function signerEliminationReason(name, f) {
 		return "deliberate low-R grinding, which it never does";
 	}
 
-	if (f.taprootSpend && p.taproot === "no") {
-		return "a taproot input, which its firmware refuses to spend";
+	if (p.input_types && f.inputTypes) {
+		const unsupported = f.inputTypes.filter((t) => t !== "unknown" && !p.input_types.includes(t));
+		if (unsupported.length > 0) {
+			return `${article(unsupported[0])} ${unsupported.join(", ")} input, which its firmware cannot spend`;
+		}
+	}
+
+	if (p.output_types && p.output_types !== "any" && f.outputTypes) {
+		const unsupported = f.outputTypes.filter((t) => !p.output_types.includes(t));
+		if (unsupported.length > 0) {
+			return `${article(unsupported[0])} ${unsupported.join(", ")} output, which its firmware cannot pay to`;
+		}
+	}
+
+	for (const o of f.opReturns) {
+		if (p.op_return_max_script_bytes != null && o.scriptBytes > p.op_return_max_script_bytes) {
+			return `an OP_RETURN output of ${o.scriptBytes} script bytes, above the ${p.op_return_max_script_bytes} its firmware accepts`;
+		}
+		if (p.op_return_max_pushes != null && o.parsed && o.pushes > p.op_return_max_pushes) {
+			return `an OP_RETURN output carrying ${o.pushes} pushes, and its firmware only ever writes ${p.op_return_max_pushes}`;
+		}
+		if (p.op_return_pushdata2 === false && o.pushdata2) {
+			return "an OP_RETURN output using OP_PUSHDATA2 or OP_PUSHDATA4, which its firmware rejects";
+		}
+		if (p.op_return_nonzero_value === false && o.valueSat > 0) {
+			return "an OP_RETURN output carrying value, and its firmware requires a zero amount";
+		}
+	}
+
+	if (p.max_fee_percent != null && f.feePercent != null && f.feePercent >= p.max_fee_percent) {
+		return `a fee worth ${f.feePercent.toFixed(1)} percent of the outputs, at or above the ${p.max_fee_percent} percent its firmware refuses to sign`;
+	}
+
+	if (p.max_fee_rate_sat_vb != null && f.feeRateSatVb != null && f.feeRateSatVb > p.max_fee_rate_sat_vb) {
+		return `a fee rate of ${Math.round(f.feeRateSatVb)} sat/vB, above the ${p.max_fee_rate_sat_vb} its firmware refuses to sign`;
 	}
 
 	if (f.uncompressedOutsideP2pk && p.uncompressed_keys !== "yes") {
@@ -494,6 +578,15 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 		uncompressedOutsideP2pk: uncompressedKeyOutsideP2pk(inputs),
 		referenceHeight,
 		taprootSpend: inputs.some(witnessLooksTaproot),
+		inputTypes: haveInputData
+			? inTypes
+			: (inputs.some(witnessLooksTaproot) ? ["p2tr"] : null),
+		outputTypes: Array.from(new Set(outputs.map((o) => o.type))),
+		opReturns: outputs
+			.filter((o) => o.type === "op_return")
+			.map((o) => Object.assign(parseOpReturn(o.scriptHex), { valueSat: o.valueSat })),
+		feePercent: null,
+		feeRateSatVb: null,
 		sighashes: [],
 		lowR: "none",
 		opReturn: outputs.some((o) => o.type === "op_return"),
@@ -504,6 +597,19 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 		changePosition: "none",
 		changeType: "none"
 	};
+
+	// The fee is only knowable when every previous output is available.
+	if (haveInputData && inputs.every((i) => i.valueSat != null)) {
+		const totalIn = inputs.reduce((sum, i) => sum + i.valueSat, 0);
+		const totalOut = outputs.reduce((sum, o) => sum + (o.valueSat || 0), 0);
+		const fee = totalIn - totalOut;
+		if (fee >= 0 && totalOut > 0) {
+			facts.feePercent = (fee * 100) / totalOut;
+		}
+		if (fee >= 0 && tx.vsize > 0) {
+			facts.feeRateSatVb = fee / tx.vsize;
+		}
+	}
 
 	if (!facts.antiFeeSniping) {
 		add("Anti-fee-sniping", "No (nLockTime = 0)",
