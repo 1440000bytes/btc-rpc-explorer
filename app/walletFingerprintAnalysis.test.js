@@ -96,7 +96,41 @@ function check(name, cond) {
 	const r = analyzeTransaction(tx, null, 0, 840000);
 	check("no-prevout: available", r.available === true);
 	check("no-prevout: haveInputData false", r.haveInputData === false);
-	check("no-prevout: no low-R/reuse signals", !r.signals.some((s) => s.label === "Low-R grinding" || s.label === "Address reuse"));
+	check("no-prevout: no reuse signal (needs previous outputs)", !r.signals.some((s) => s.label === "Address reuse"));
+	check("no-prevout: no low-R signal when the input carries no signature", !r.signals.some((s) => s.label === "Low-R grinding"));
+}
+
+{
+	// a pruned node supplies no previous outputs, but the signatures are in the raw tx
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: Array.from({ length: 6 }, (_, i) => ({
+			txid: "c8".repeat(32), vout: i, sequence: 0xfffffffd,
+			scriptSig: { asm: lowRSig + " " + compressedPk }, txinwitness: []
+		})),
+		vout: [out("pubkeyhash", "1Q41", 0.04, "76a914" + "11".repeat(20) + "88ac")]
+	};
+	const r = analyzeTransaction(tx, null, 840001, 840002);
+
+	check("pruned: low-R is analyzed without previous outputs", r.signals.some((s) => s.label === "Low-R grinding" && /all 6/.test(s.value)));
+	check("pruned: strong low-R still eliminates the non-grinding devices", !r.signerCandidates.includes("Trezor device") && !r.signerCandidates.includes("Ledger device"));
+	check("pruned: signing device row is reported", r.signerVerdict === "Coldcard not ruled out");
+	check("pruned: input-type dependent checks stay skipped", r.haveInputData === false && !r.signals.some((s) => s.label === "Input script types"));
+}
+
+{
+	// taproot key-path spend recognized from the witness alone, with no previous outputs
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [{ txid: "c9".repeat(32), vout: 0, sequence: 0xfffffffd, txinwitness: ["ab".repeat(64)], scriptSig: { asm: "" } }],
+		vout: [out("witness_v1_taproot", "bc1ptr", 0.01, "5120" + "77".repeat(32))]
+	};
+	const r = analyzeTransaction(tx, null, 840001, 840002);
+
+	check("pruned: a taproot witness rules out Coldcard without previous outputs", !r.signerCandidates.includes("Coldcard"));
+	check("pruned: the taproot-capable devices survive", r.signerVerdict === "Trezor device, Ledger device not ruled out");
 }
 
 {
@@ -391,7 +425,7 @@ function check(name, cond) {
 	check("signer: deliberate low-R grinding eliminates the non-grinding devices", !r.signerCandidates.includes("Trezor device") && !r.signerCandidates.includes("Ledger device"));
 	check("signer: the grinding device survives", r.signerCandidates.includes("Coldcard"));
 	check("signer: verdict names the surviving device", r.signerVerdict === "Coldcard not ruled out");
-	check("signer: signing device row explains the elimination", r.signals.some((s) => s.label === "Signing device" && /never grinds/.test(s.implication)));
+	check("signer: signing device row names the reason for each elimination", r.signals.some((s) => s.label === "Signing device" && /Trezor device: deliberate low-R grinding, which it never does/.test(s.implication)));
 	check("signer: signer verdict is separate from the wallet verdict", r.verdict !== r.signerVerdict);
 }
 

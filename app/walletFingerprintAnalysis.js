@@ -135,7 +135,7 @@ function sighashName(byte) {
 
 function sighashOf(input) {
 	// Taproot key-path spend: a single 64-byte (implicit SIGHASH_DEFAULT) or 65-byte witness element
-	if (input.type === "p2tr" && input.witness.length === 1) {
+	if ((input.type === "p2tr" || input.type === "unknown") && input.witness.length === 1) {
 		const w = input.witness[0];
 		if (w.length === 128) {
 			return "SIGHASH_DEFAULT";
@@ -177,6 +177,31 @@ function compressedKeysOnly(inputs) {
 	}
 
 	return true;
+}
+
+// A taproot key-path spend is a single 64-byte (or 65-byte with an explicit sighash byte)
+// witness element, and a script-path spend ends with a control block. Both are visible in
+// the witness, so a taproot spend can still be recognized without previous-output data.
+function witnessLooksTaproot(input) {
+	if (input.type === "p2tr") {
+		return true;
+	}
+
+	if (input.type !== "unknown") {
+		return false;
+	}
+
+	if (input.witness.length === 1) {
+		return input.witness[0].length === 128 || input.witness[0].length === 130;
+	}
+
+	if (input.witness.length >= 2) {
+		const control = input.witness[input.witness.length - 1];
+		const lead = control.substring(0, 2);
+		return control.length >= 66 && (control.length - 2) % 64 === 0 && (lead === "c0" || lead === "c1");
+	}
+
+	return false;
 }
 
 function uncompressedKeyOutsideP2pk(inputs) {
@@ -309,7 +334,7 @@ function matchCatalog(f) {
 		return [];
 	}
 
-	if (f.haveInputData && f.compressed === false) {
+	if (f.compressed === false) {
 		return [];
 	}
 
@@ -354,10 +379,10 @@ function matchCatalog(f) {
 			return false;
 		}
 
-		if (f.haveInputData && f.lowR === "high" && p.low_r === "always") {
+		if (f.lowR === "high" && p.low_r === "always") {
 			return false;
 		}
-		if (f.haveInputData && f.lowR === "strong_low" && p.low_r === "no") {
+		if (f.lowR === "strong_low" && p.low_r === "no") {
 			return false;
 		}
 
@@ -398,67 +423,49 @@ function matchCatalog(f) {
 	});
 }
 
-function signerSummary(name) {
+// A signing device only leaves fingerprints in the signatures and in what it refuses
+// to sign, so it is matched on its own facts instead of the wallet catalog. Returns the
+// reason the device is incompatible with this transaction, or null if it is still possible.
+function signerEliminationReason(name, f) {
 	const p = CATALOG.signers[name];
-	const bits = [];
 
-	if (p.low_r === "always") {
-		bits.push(p.low_r_since_height
-			? `grinds every signature for low-R since block ${p.low_r_since_height}`
-			: "grinds every signature for low-R");
-	}
-	if (p.low_r === "no") {
-		bits.push("never grinds for low-R");
-	}
-	if (p.taproot === "no") {
-		bits.push("refuses to spend a taproot input");
-	}
-	if (p.uncompressed_keys === "p2pk_only") {
-		bits.push("signs for an uncompressed public key only on a P2PK input");
-	}
-	if (p.uncompressed_keys === "no") {
-		bits.push("never signs for an uncompressed public key");
-	}
-	if (p.sighash) {
-		bits.push("signs " + p.sighash.join(", ") + " with default settings");
+	// Grinding is a firmware behavior, so it can only rule the signer out for
+	// transactions mined after the firmware that introduced it.
+	const grinding = p.low_r === "always"
+		&& (!p.low_r_since_height || !f.referenceHeight || f.referenceHeight >= p.low_r_since_height);
+
+	if (f.lowR === "high" && grinding) {
+		return p.low_r_since_height
+			? `a high-R signature, and it has ground every signature since block ${p.low_r_since_height}`
+			: "a high-R signature, and it grinds every signature";
 	}
 
-	return `${name} ${bits.join(", ")}`;
+	if (f.lowR === "strong_low" && p.low_r === "no") {
+		return "deliberate low-R grinding, which it never does";
+	}
+
+	if (f.taprootSpend && p.taproot === "no") {
+		return "a taproot input, which its firmware refuses to spend";
+	}
+
+	if (f.uncompressedOutsideP2pk && p.uncompressed_keys !== "yes") {
+		return p.uncompressed_keys === "p2pk_only"
+			? "an uncompressed public key outside a P2PK input"
+			: "an uncompressed public key, which it never signs for";
+	}
+
+	if (p.sighash && f.sighashes.length > 0) {
+		const refused = f.sighashes.filter((s) => !p.sighash.includes(s));
+		if (refused.length > 0) {
+			return refused.join(", ") + ", which it will not sign with default settings";
+		}
+	}
+
+	return null;
 }
 
-// A signing device only leaves fingerprints in the signatures and in what it refuses
-// to sign, so it is matched on its own facts instead of the wallet catalog.
 function matchSigners(f) {
-	return SIGNERS.filter((name) => {
-		const p = CATALOG.signers[name];
-
-		// Grinding is a firmware behavior, so it can only rule the signer out for
-		// transactions mined after the firmware that introduced it.
-		const grinding = p.low_r === "always"
-			&& (!p.low_r_since_height || !f.referenceHeight || f.referenceHeight >= p.low_r_since_height);
-
-		if (f.haveInputData && f.lowR === "high" && grinding) {
-			return false;
-		}
-
-		if (f.haveInputData && f.lowR === "strong_low" && p.low_r === "no") {
-			return false;
-		}
-
-		if (f.taprootSpend && p.taproot === "no") {
-			return false;
-		}
-
-		if (f.uncompressedOutsideP2pk && p.uncompressed_keys !== "yes") {
-			return false;
-		}
-
-		if (p.sighash && f.sighashes.length > 0 && !f.sighashes.every((s) => p.sighash.includes(s))) {
-			return false;
-		}
-
-		return true;
-	});
+	return SIGNERS.filter((name) => signerEliminationReason(name, f) === null);
 }
 
 function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, extraSignatures) {
@@ -486,7 +493,7 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 		compressed: compressedKeysOnly(inputs),
 		uncompressedOutsideP2pk: uncompressedKeyOutsideP2pk(inputs),
 		referenceHeight,
-		taprootSpend: haveInputData && inTypes.includes("p2tr"),
+		taprootSpend: inputs.some(witnessLooksTaproot),
 		sighashes: [],
 		lowR: "none",
 		opReturn: outputs.some((o) => o.type === "op_return"),
@@ -546,10 +553,17 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 		} else {
 			add("Input script types", inTypes[0] || "n/a", "All inputs share one script type.", null);
 		}
+	}
 
-		if (facts.compressed) {
+	// Signatures and public keys are carried in the input scripts and witnesses, so these
+	// checks work from the raw transaction alone and must not be gated on previous-output
+	// data, which a pruned node cannot supply.
+	{
+		const pubkeysSeen = inputs.filter((i) => sigAndPubkeyHex(i).pubkey).length;
+
+		if (facts.compressed && pubkeysSeen > 0) {
 			add("Public keys", "Compressed", "Compressed ECDSA public keys (standard for all modern wallets).", null);
-		} else {
+		} else if (!facts.compressed) {
 			add("Public keys", "Uncompressed key present",
 				"Uncompressed public keys are legacy behavior and rare today.",
 				"An uncompressed key is a strong, unusual fingerprint.");
@@ -667,7 +681,7 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 
 	if (signersEliminated.length > 0) {
 		const preface = "A signing device does not build the transaction, so it is matched only on the signatures and on what it refuses to sign. ";
-		const because = "Ruled out here: " + signersEliminated.map(signerSummary).join("; ") + ".";
+		const because = "Ruled out by " + signersEliminated.map((name) => `${name}: ${signerEliminationReason(name, facts)}`).join("; ") + ".";
 
 		if (signerCandidates.length === 0) {
 			signerVerdict = "Ruled out: " + SIGNERS.join(", ");
@@ -677,7 +691,7 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 			signerVerdict = signerCandidates.join(", ") + " not ruled out";
 			signerVerdictClass = "info";
 			add("Signing device", signerVerdict,
-				preface + because + " Still possible: " + signerCandidates.map(signerSummary).join("; ") + ". This is compatibility and not attribution, since an unprofiled signer could produce the same signatures.",
+				preface + because + " Still possible: " + signerCandidates.join(", ") + ". This is compatibility and not attribution, since the coordinator software leaves the same signature-level traces and an unprofiled signer could produce them too.",
 				null);
 		}
 	}
