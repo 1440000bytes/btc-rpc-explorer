@@ -31,7 +31,7 @@
 		"Wasabi": { "version": 2, "anti_fee_sniping": "sometimes", "rbf": "never", "multi_type_vin": "yes", "low_r": "no", "op_return": "no", "batching": "multi", "bip69": "never", "address_reuse": "no", "change_position": "last", "change_type": "input", "nsequence": ["0xfffffffe", "0xffffffff"] }
 	},
 	"signer_vocabulary": {
-		"note": "A signing device does not build the transaction, so version, locktime, nSequence, output order and change selection all come from the coordinator software. Only the fingerprints left by the signing itself are listed here, and they are matched separately from the wallet catalog.",
+		"note": "A signing device does not build the transaction, so version, locktime, nSequence, output order and change selection all come from the coordinator software. Only the fingerprints left by the signing itself are listed here, and they are matched separately from the wallet catalog. The Trezor and Ledger entries in that catalog describe their coordinator apps (Trezor Suite, Ledger Live) building a transaction, which is a different question from the device signing one under any coordinator.",
 		"low_r": ["always", "no", "unknown"],
 		"low_r_since_height": "block height from which low_r applies, approximating the release of the firmware that introduced grinding (Coldcard 4.1.2, July 2021); below it a high-R signature does not rule the signer out",
 		"taproot": "yes if the signer can spend a taproot input, no if it refuses",
@@ -39,6 +39,8 @@
 		"sighash": "list of sighash flags the signer will sign with its default settings"
 	},
 	"signers": {
-		"Coldcard": { "low_r": "always", "low_r_since_height": 694000, "taproot": "no", "uncompressed_keys": "p2pk_only", "sighash": ["SIGHASH_ALL", "SIGHASH_SINGLE", "SIGHASH_ALL|ANYONECANPAY", "SIGHASH_SINGLE|ANYONECANPAY"] }
+		"Coldcard": { "low_r": "always", "low_r_since_height": 694000, "taproot": "no", "uncompressed_keys": "p2pk_only", "sighash": ["SIGHASH_ALL", "SIGHASH_SINGLE", "SIGHASH_ALL|ANYONECANPAY", "SIGHASH_SINGLE|ANYONECANPAY"] },
+		"Trezor device": { "low_r": "no", "taproot": "yes", "uncompressed_keys": "no", "sighash": ["SIGHASH_DEFAULT", "SIGHASH_ALL"] },
+		"Ledger device": { "low_r": "no", "taproot": "yes", "uncompressed_keys": "no", "sighash": ["SIGHASH_DEFAULT", "SIGHASH_ALL"] }
 	}
 }

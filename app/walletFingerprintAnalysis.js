@@ -407,11 +407,17 @@ function signerSummary(name) {
 			? `grinds every signature for low-R since block ${p.low_r_since_height}`
 			: "grinds every signature for low-R");
 	}
+	if (p.low_r === "no") {
+		bits.push("never grinds for low-R");
+	}
 	if (p.taproot === "no") {
 		bits.push("refuses to spend a taproot input");
 	}
 	if (p.uncompressed_keys === "p2pk_only") {
 		bits.push("signs for an uncompressed public key only on a P2PK input");
+	}
+	if (p.uncompressed_keys === "no") {
+		bits.push("never signs for an uncompressed public key");
 	}
 	if (p.sighash) {
 		bits.push("signs " + p.sighash.join(", ") + " with default settings");
@@ -432,6 +438,10 @@ function matchSigners(f) {
 			&& (!p.low_r_since_height || !f.referenceHeight || f.referenceHeight >= p.low_r_since_height);
 
 		if (f.haveInputData && f.lowR === "high" && grinding) {
+			return false;
+		}
+
+		if (f.haveInputData && f.lowR === "strong_low" && p.low_r === "no") {
 			return false;
 		}
 
@@ -647,15 +657,27 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 	const candidates = matchCatalog(facts);
 	const signerCandidates = matchSigners(facts);
 
-	if (SIGNERS.length > 0) {
+	// Nothing in a transaction positively identifies a signing device, so the row is only
+	// worth showing when at least one device has been eliminated. Reporting "not ruled out"
+	// when no device is eliminated would fire on almost every ordinary transaction.
+	const signersEliminated = SIGNERS.filter((name) => !signerCandidates.includes(name));
+
+	let signerVerdict = null;
+	let signerVerdictClass = null;
+
+	if (signersEliminated.length > 0) {
 		const preface = "A signing device does not build the transaction, so it is matched only on the signatures and on what it refuses to sign. ";
-		if (signerCandidates.length > 0) {
-			add("Signing device", signerCandidates.join(", ") + " not ruled out",
-				preface + "Nothing observed here is incompatible with " + signerCandidates.map(signerSummary).join("; ") + ". This is compatibility, not attribution: the same signatures could come from a signer that is not profiled here.",
-				null);
+		const because = "Ruled out here: " + signersEliminated.map(signerSummary).join("; ") + ".";
+
+		if (signerCandidates.length === 0) {
+			signerVerdict = "Ruled out: " + SIGNERS.join(", ");
+			signerVerdictClass = "secondary";
+			add("Signing device", signerVerdict, preface + because, null);
 		} else {
-			add("Signing device", "None of the profiled signing devices",
-				preface + "Every profiled signing device is ruled out: " + SIGNERS.map(signerSummary).join("; ") + ".",
+			signerVerdict = signerCandidates.join(", ") + " not ruled out";
+			signerVerdictClass = "info";
+			add("Signing device", signerVerdict,
+				preface + because + " Still possible: " + signerCandidates.map(signerSummary).join("; ") + ". This is compatibility and not attribution, since an unprofiled signer could produce the same signatures.",
 				null);
 		}
 	}
@@ -683,8 +705,8 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 		verdict,
 		verdictClass,
 		signerCandidates,
-		signerVerdict: signerCandidates.length > 0 ? signerCandidates.join(", ") : "None of the profiled signing devices",
-		signerVerdictClass: signerCandidates.length > 0 ? "info" : "secondary",
+		signerVerdict,
+		signerVerdictClass,
 		disclaimer: "Fingerprints are heuristic and probabilistic. A transaction may match a wallet it was not made with or unlisted wallet. It is also possible that the transaction was created and signed using different wallets."
 	};
 }

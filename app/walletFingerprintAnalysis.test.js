@@ -369,9 +369,30 @@ function check(name, cond) {
 	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
 	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
 
-	check("signer: Coldcard not ruled out by a low-R segwit spend", r.signerCandidates.includes("Coldcard"));
-	check("signer: signing device signal present", r.signals.some((s) => s.label === "Signing device" && /Coldcard/.test(s.value)));
-	check("signer: signer verdict is separate from the wallet verdict", r.signerVerdict === "Coldcard" && r.verdict !== r.signerVerdict);
+	check("signer: an ordinary low-R spend eliminates nobody", r.signerCandidates.length === 3);
+	check("signer: nothing eliminated means no verdict is reported", r.signerVerdict === null);
+	check("signer: nothing eliminated means no signing device row", !r.signals.some((s) => s.label === "Signing device"));
+}
+
+{
+	// six low-R signatures is the threshold at which grinding is treated as deliberate
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: Array.from({ length: 6 }, (_, i) => p2wpkhInput("c7".repeat(32), i, 0xfffffffd, lowRSig, compressedPk)),
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.05, "0014" + "11".repeat(20))]
+	};
+	const txInputs = {};
+	for (let i = 0; i < 6; i++) {
+		txInputs[i] = prevout("witness_v0_keyhash", "bc1qin" + i, 0.01);
+	}
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("signer: deliberate low-R grinding eliminates the non-grinding devices", !r.signerCandidates.includes("Trezor device") && !r.signerCandidates.includes("Ledger device"));
+	check("signer: the grinding device survives", r.signerCandidates.includes("Coldcard"));
+	check("signer: verdict names the surviving device", r.signerVerdict === "Coldcard not ruled out");
+	check("signer: signing device row explains the elimination", r.signals.some((s) => s.label === "Signing device" && /never grinds/.test(s.implication)));
+	check("signer: signer verdict is separate from the wallet verdict", r.verdict !== r.signerVerdict);
 }
 
 {
@@ -385,7 +406,7 @@ function check(name, cond) {
 	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
 
 	check("signer: high-R rules out Coldcard", !r.signerCandidates.includes("Coldcard"));
-	check("signer: ruled-out verdict", r.signerVerdict === "None of the profiled signing devices");
+	check("signer: the non-grinding devices survive a high-R signature", r.signerVerdict === "Trezor device, Ledger device not ruled out");
 	check("signer: high-R implication names the grinding signers", r.signals.some((s) => s.label === "Low-R grinding" && /Coldcard/.test(s.implication)));
 }
 
@@ -400,6 +421,7 @@ function check(name, cond) {
 	const r = analyzeTransaction(tx, txInputs, 600000, 840002);
 
 	check("signer: high-R before firmware 4.1.2 does not rule out Coldcard", r.signerCandidates.includes("Coldcard"));
+	check("signer: nothing eliminated at that height, so no verdict", r.signerVerdict === null);
 }
 
 {
@@ -413,6 +435,7 @@ function check(name, cond) {
 	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
 
 	check("signer: a taproot spend rules out Coldcard mainline firmware", !r.signerCandidates.includes("Coldcard"));
+	check("signer: Trezor and Ledger sign taproot, so they survive", r.signerVerdict === "Trezor device, Ledger device not ruled out");
 }
 
 {
@@ -425,7 +448,8 @@ function check(name, cond) {
 	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
 	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
 
-	check("signer: SIGHASH_NONE rules out Coldcard", !r.signerCandidates.includes("Coldcard"));
+	check("signer: SIGHASH_NONE rules out every profiled device", r.signerCandidates.length === 0);
+	check("signer: all-eliminated verdict", r.signerVerdict === "Ruled out: Coldcard, Trezor device, Ledger device");
 }
 
 {
@@ -438,7 +462,7 @@ function check(name, cond) {
 	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
 	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
 
-	check("signer: an uncompressed key outside a P2PK input rules out Coldcard", !r.signerCandidates.includes("Coldcard"));
+	check("signer: an uncompressed key outside a P2PK input rules out every profiled device", r.signerCandidates.length === 0);
 }
 
 (async () => {
