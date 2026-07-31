@@ -356,6 +356,91 @@ function check(name, cond) {
 	check("sighash: a plain SIGHASH_ALL transaction adds no sighash signal", !r.signals.some((s) => s.label === "Signature hash type"));
 }
 
+{
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [p2wpkhInput("c1".repeat(32), 0, 0xfffffffd, lowRSig, compressedPk)],
+		vout: [
+			out("witness_v0_keyhash", "bc1qpay", 0.01, "0014" + "11".repeat(20)),
+			out("witness_v0_keyhash", "bc1qchg", 0.00987654, "0014" + "22".repeat(20))
+		]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("signer: Coldcard not ruled out by a low-R segwit spend", r.signerCandidates.includes("Coldcard"));
+	check("signer: signing device signal present", r.signals.some((s) => s.label === "Signing device" && /Coldcard/.test(s.value)));
+	check("signer: signer verdict is separate from the wallet verdict", r.signerVerdict === "Coldcard" && r.verdict !== r.signerVerdict);
+}
+
+{
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [p2wpkhInput("c2".repeat(32), 0, 0xfffffffd, highRSig, compressedPk)],
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.01, "0014" + "11".repeat(20))]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("signer: high-R rules out Coldcard", !r.signerCandidates.includes("Coldcard"));
+	check("signer: ruled-out verdict", r.signerVerdict === "None of the profiled signing devices");
+	check("signer: high-R implication names the grinding signers", r.signals.some((s) => s.label === "Low-R grinding" && /Coldcard/.test(s.implication)));
+}
+
+{
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [p2wpkhInput("c3".repeat(32), 0, 0xfffffffd, highRSig, compressedPk)],
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.01, "0014" + "11".repeat(20))]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
+	const r = analyzeTransaction(tx, txInputs, 600000, 840002);
+
+	check("signer: high-R before firmware 4.1.2 does not rule out Coldcard", r.signerCandidates.includes("Coldcard"));
+}
+
+{
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [{ txid: "c4".repeat(32), vout: 0, sequence: 0xfffffffd, txinwitness: ["ab".repeat(64)], scriptSig: { asm: "" } }],
+		vout: [out("witness_v1_taproot", "bc1ptr", 0.01, "5120" + "77".repeat(32))]
+	};
+	const txInputs = { 0: prevout("witness_v1_taproot", "bc1pin", 0.02) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("signer: a taproot spend rules out Coldcard mainline firmware", !r.signerCandidates.includes("Coldcard"));
+}
+
+{
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [p2wpkhInput("c5".repeat(32), 0, 0xfffffffd, lowRSig.slice(0, -2) + "02", compressedPk)],
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.01, "0014" + "11".repeat(20))]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("signer: SIGHASH_NONE rules out Coldcard", !r.signerCandidates.includes("Coldcard"));
+}
+
+{
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [p2wpkhInput("c6".repeat(32), 0, 0xfffffffd, lowRSig, uncompressedPk)],
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.01, "0014" + "11".repeat(20))]
+	};
+	const txInputs = { 0: prevout("witness_v0_keyhash", "bc1qin", 0.02) };
+	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
+
+	check("signer: an uncompressed key outside a P2PK input rules out Coldcard", !r.signerCandidates.includes("Coldcard"));
+}
+
 (async () => {
 	const pk = compressedPk;
 	const chainOut = [

@@ -2,6 +2,7 @@
 
 const CATALOG = require("./walletFingerprints.json");
 const WALLETS = Object.keys(CATALOG.wallets);
+const SIGNERS = Object.keys(CATALOG.signers || {});
 
 const STRONG_LOWR_SIGS = 6;
 
@@ -20,7 +21,8 @@ const REFERENCES = {
 	"Input ordering": "https://github.com/bitcoin/bips/blob/master/bip-0069.mediawiki",
 	"Address reuse": "https://en.bitcoin.it/wiki/Privacy#Address_reuse",
 	"Detected change output": "https://en.bitcoin.it/wiki/Privacy#Change_address_detection",
-	"Change type": "https://en.bitcoin.it/wiki/Privacy#Change_address_detection"
+	"Change type": "https://en.bitcoin.it/wiki/Privacy#Change_address_detection",
+	"Signing device": "https://en.bitcoin.it/wiki/Privacy#Wallet_fingerprinting"
 };
 
 const TYPE_MAP = {
@@ -175,6 +177,21 @@ function compressedKeysOnly(inputs) {
 	}
 
 	return true;
+}
+
+function uncompressedKeyOutsideP2pk(inputs) {
+	for (const input of inputs) {
+		if (input.type === "p2pk") {
+			continue;
+		}
+
+		const { pubkey } = sigAndPubkeyHex(input);
+		if (pubkey && pubkey.substring(0, 2) === "04") {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 function ecdsaSignatureStats(inputs) {
@@ -381,6 +398,59 @@ function matchCatalog(f) {
 	});
 }
 
+function signerSummary(name) {
+	const p = CATALOG.signers[name];
+	const bits = [];
+
+	if (p.low_r === "always") {
+		bits.push(p.low_r_since_height
+			? `grinds every signature for low-R since block ${p.low_r_since_height}`
+			: "grinds every signature for low-R");
+	}
+	if (p.taproot === "no") {
+		bits.push("refuses to spend a taproot input");
+	}
+	if (p.uncompressed_keys === "p2pk_only") {
+		bits.push("signs for an uncompressed public key only on a P2PK input");
+	}
+	if (p.sighash) {
+		bits.push("signs " + p.sighash.join(", ") + " with default settings");
+	}
+
+	return `${name} ${bits.join(", ")}`;
+}
+
+// A signing device only leaves fingerprints in the signatures and in what it refuses
+// to sign, so it is matched on its own facts instead of the wallet catalog.
+function matchSigners(f) {
+	return SIGNERS.filter((name) => {
+		const p = CATALOG.signers[name];
+
+		// Grinding is a firmware behavior, so it can only rule the signer out for
+		// transactions mined after the firmware that introduced it.
+		const grinding = p.low_r === "always"
+			&& (!p.low_r_since_height || !f.referenceHeight || f.referenceHeight >= p.low_r_since_height);
+
+		if (f.haveInputData && f.lowR === "high" && grinding) {
+			return false;
+		}
+
+		if (f.taprootSpend && p.taproot === "no") {
+			return false;
+		}
+
+		if (f.uncompressedOutsideP2pk && p.uncompressed_keys !== "yes") {
+			return false;
+		}
+
+		if (p.sighash && f.sighashes.length > 0 && !f.sighashes.every((s) => p.sighash.includes(s))) {
+			return false;
+		}
+
+		return true;
+	});
+}
+
 function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, extraSignatures) {
 	if (!tx || !tx.vin || !tx.vout || (tx.vin[0] && tx.vin[0].coinbase)) {
 		return { available: false };
@@ -404,6 +474,10 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 		onlyNativeSegwit: haveInputData && inTypes.every((t) => t === "p2wpkh"),
 		multiType: inTypes.length > 1,
 		compressed: compressedKeysOnly(inputs),
+		uncompressedOutsideP2pk: uncompressedKeyOutsideP2pk(inputs),
+		referenceHeight,
+		taprootSpend: haveInputData && inTypes.includes("p2tr"),
+		sighashes: [],
 		lowR: "none",
 		opReturn: outputs.some((o) => o.type === "op_return"),
 		batched: outputs.length > 2,
@@ -483,12 +557,12 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 			if (totalHigh > 0) {
 				facts.lowR = "high";
 				add("Low-R grinding", `No (${totalHigh} of ${totalExamined} ECDSA signature(s)${across} have a 33-byte R value)`,
-					"A wallet that grinds for low-R signatures would never produce a high-R one, so a high-R signature rules out the grinding wallets (Bitcoin Core, Electrum, Sparrow, Bull Bitcoin, Liana).",
+					"A wallet that grinds for low-R signatures would never produce a high-R one, so a high-R signature rules out the grinding wallets (Bitcoin Core, Electrum, Sparrow, Bull Bitcoin, Liana) and the signing devices that always grind (Coldcard).",
 					null);
 			} else if (totalExamined >= STRONG_LOWR_SIGS) {
 				facts.lowR = "strong_low";
 				add("Low-R grinding", `Yes (all ${totalExamined} ECDSA signature(s)${across} are low-R)`,
-					`The chance of ${totalExamined} low-R signatures occurring by luck is about 1 in ${Math.pow(2, totalExamined)}, so this is strong evidence of deliberate low-R grinding (Bitcoin Core, Electrum, Sparrow, Bull Bitcoin, Liana).`,
+					`The chance of ${totalExamined} low-R signatures occurring by luck is about 1 in ${Math.pow(2, totalExamined)}, so this is strong evidence of deliberate low-R grinding (Bitcoin Core, Electrum, Sparrow, Bull Bitcoin, Liana). The grinding can also come from the signing device rather than the software that built the transaction, since a Coldcard grinds every signature.`,
 					null);
 			} else {
 				facts.lowR = "low";
@@ -500,6 +574,7 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 	}
 
 	const sighashes = Array.from(new Set(inputs.map(sighashOf).filter(Boolean)));
+	facts.sighashes = sighashes;
 	const nonStandardSighash = sighashes.filter((s) => s !== "SIGHASH_ALL" && s !== "SIGHASH_DEFAULT");
 	if (nonStandardSighash.length > 0) {
 		add("Signature hash type", sighashes.join(", "),
@@ -570,6 +645,20 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 	}
 
 	const candidates = matchCatalog(facts);
+	const signerCandidates = matchSigners(facts);
+
+	if (SIGNERS.length > 0) {
+		const preface = "A signing device does not build the transaction, so it is matched only on the signatures and on what it refuses to sign. ";
+		if (signerCandidates.length > 0) {
+			add("Signing device", signerCandidates.join(", ") + " not ruled out",
+				preface + "Nothing observed here is incompatible with " + signerCandidates.map(signerSummary).join("; ") + ". This is compatibility, not attribution: the same signatures could come from a signer that is not profiled here.",
+				null);
+		} else {
+			add("Signing device", "None of the profiled signing devices",
+				preface + "Every profiled signing device is ruled out: " + SIGNERS.map(signerSummary).join("; ") + ".",
+				null);
+		}
+	}
 
 	signals.forEach((s) => { s.reference = REFERENCES[s.label] || null; });
 
@@ -593,6 +682,9 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 		walletCandidates: candidates,
 		verdict,
 		verdictClass,
+		signerCandidates,
+		signerVerdict: signerCandidates.length > 0 ? signerCandidates.join(", ") : "None of the profiled signing devices",
+		signerVerdictClass: signerCandidates.length > 0 ? "info" : "secondary",
 		disclaimer: "Fingerprints are heuristic and probabilistic. A transaction may match a wallet it was not made with or unlisted wallet. It is also possible that the transaction was created and signed using different wallets."
 	};
 }
@@ -666,5 +758,6 @@ async function gatherLinkedSignatures(startTx, startTxInputs, fetchTxWithInputs,
 module.exports = {
 	analyzeTransaction,
 	gatherLinkedSignatures,
-	WALLETS
+	WALLETS,
+	SIGNERS
 };

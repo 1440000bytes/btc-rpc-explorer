@@ -286,9 +286,13 @@ block content
 				if (walletFingerprintAnalysis && walletFingerprintAnalysis.available)
 					- var wfa = walletFingerprintAnalysis;
 					+contentSection("Wallet Fingerprints", true, "txPageShowFingerprints", true)
-						p.mb-3
+						p.mb-1
 							span.fw-bold.me-2 Likely wallet:
 							span.badge(class=`text-bg-${wfa.verdictClass}`) #{wfa.verdict}
+						if (wfa.signerVerdict)
+							p.mb-3
+								span.fw-bold.me-2 Compatible signing device:
+								span.badge(class=`text-bg-${wfa.signerVerdictClass}`) #{wfa.signerVerdict}
 						.table-responsive
 							table.table.table-sm.small.mb-2
 								thead
