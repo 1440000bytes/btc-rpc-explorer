@@ -523,7 +523,8 @@ function signerEliminationReason(name, f) {
 	if (p.input_types && f.inputTypes) {
 		const unsupported = f.inputTypes.filter((t) => t !== "unknown" && !p.input_types.includes(t));
 		if (unsupported.length > 0) {
-			return { rule: "capability", text: `${article(unsupported[0])} ${unsupported.join(", ")} input, which its firmware cannot spend` };
+			const note = p.input_types_note ? ` (${p.input_types_note})` : "";
+			return { rule: "capability", text: `${article(unsupported[0])} ${unsupported.join(", ")} input, which its firmware cannot spend${note}` };
 		}
 	}
 

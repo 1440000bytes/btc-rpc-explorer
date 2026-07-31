@@ -631,3 +631,18 @@ function check(name, cond) {
 	check("survivor: row lists the checks that could not run", r.signals.some((s) => s.label === "Signing device" && /could not test .*fee ceiling/.test(s.implication)));
 	check("survivor: row notes rules that never exclude", r.signals.some((s) => s.label === "Signing device" && /never exclude anything/.test(s.implication)));
 }
+
+{
+	// a taproot input excludes the stock firmware, but the EDGE build spends taproot,
+	// so the exclusion must carry that caveat rather than reading as absolute
+	const tx = {
+		version: 2,
+		locktime: 0,
+		vin: [{ txid: "d7".repeat(32), vout: 0, sequence: 0xfffffffd, txinwitness: ["ab".repeat(64)], scriptSig: { asm: "" } }],
+		vout: [out("witness_v1_taproot", "bc1ptr", 0.01, "5120" + "77".repeat(32))]
+	};
+	const r = analyzeTransaction(tx, null, 840001, 840002);
+
+	check("edge: a taproot input still excludes the stock Coldcard", !r.signerCandidates.includes("Coldcard"));
+	check("edge: the exclusion names the EDGE firmware caveat", r.signals.some((s) => s.label === "Signing device" && /EDGE build adds taproot spending/.test(s.implication)));
+}
