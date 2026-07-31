@@ -115,7 +115,7 @@ function check(name, cond) {
 
 	check("pruned: low-R is analyzed without previous outputs", r.signals.some((s) => s.label === "Low-R grinding" && /all 6/.test(s.value)));
 	check("pruned: strong low-R still eliminates the non-grinding devices", !r.signerCandidates.includes("Trezor device") && !r.signerCandidates.includes("Ledger device"));
-	check("pruned: signing device row is reported", r.signerVerdict === "Coldcard not ruled out");
+	check("pruned: grinding-based survival is graded possible, not likely", r.signerVerdict === "Coldcard possible");
 	check("pruned: input-type dependent checks stay skipped", r.haveInputData === false && !r.signals.some((s) => s.label === "Input script types"));
 }
 
@@ -130,7 +130,7 @@ function check(name, cond) {
 	const r = analyzeTransaction(tx, null, 840001, 840002);
 
 	check("pruned: a taproot witness rules out Coldcard without previous outputs", !r.signerCandidates.includes("Coldcard"));
-	check("pruned: the taproot-capable devices survive", r.signerVerdict === "Trezor device, Ledger device not ruled out");
+	check("pruned: the taproot-capable devices survive", r.signerVerdict === "Trezor device, Ledger device possible");
 }
 
 {
@@ -424,7 +424,7 @@ function check(name, cond) {
 
 	check("signer: deliberate low-R grinding eliminates the non-grinding devices", !r.signerCandidates.includes("Trezor device") && !r.signerCandidates.includes("Ledger device"));
 	check("signer: the grinding device survives", r.signerCandidates.includes("Coldcard"));
-	check("signer: verdict names the surviving device", r.signerVerdict === "Coldcard not ruled out");
+	check("signer: verdict names the survivor with a strength grade", r.signerVerdict === "Coldcard possible");
 	check("signer: signing device row names the reason for each elimination", r.signals.some((s) => s.label === "Signing device" && /Trezor device: deliberate low-R grinding, which it never does/.test(s.implication)));
 	check("signer: signer verdict is separate from the wallet verdict", r.verdict !== r.signerVerdict);
 }
@@ -440,7 +440,7 @@ function check(name, cond) {
 	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
 
 	check("signer: high-R rules out Coldcard", !r.signerCandidates.includes("Coldcard"));
-	check("signer: the non-grinding devices survive a high-R signature", r.signerVerdict === "Trezor device, Ledger device not ruled out");
+	check("signer: the non-grinding devices survive a high-R signature", r.signerVerdict === "Trezor device, Ledger device possible");
 	check("signer: high-R implication names the grinding signers", r.signals.some((s) => s.label === "Low-R grinding" && /Coldcard/.test(s.implication)));
 }
 
@@ -469,7 +469,7 @@ function check(name, cond) {
 	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
 
 	check("signer: a taproot spend rules out Coldcard mainline firmware", !r.signerCandidates.includes("Coldcard"));
-	check("signer: Trezor and Ledger sign taproot, so they survive", r.signerVerdict === "Trezor device, Ledger device not ruled out");
+	check("signer: Trezor and Ledger sign taproot, so they survive", r.signerVerdict === "Trezor device, Ledger device possible");
 }
 
 {
@@ -483,7 +483,7 @@ function check(name, cond) {
 	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
 
 	check("signer: SIGHASH_NONE rules out every profiled device", r.signerCandidates.length === 0);
-	check("signer: all-eliminated verdict", r.signerVerdict === "Ruled out: Coldcard, Trezor device, Ledger device");
+	check("signer: all-eliminated verdict", r.signerVerdict === "Coldcard, Trezor device, Ledger device ruled out");
 }
 
 {
@@ -613,5 +613,21 @@ function check(name, cond) {
 	const r = analyzeTransaction(tx, txInputs, 840001, 840002);
 
 	check("p2pk: a bare pubkey input rules out Trezor and Ledger", !r.signerCandidates.includes("Trezor device") && !r.signerCandidates.includes("Ledger device"));
-	check("p2pk: Coldcard is the only device that can spend it", r.signerVerdict === "Coldcard not ruled out");
+	check("p2pk: Coldcard is the only device that can spend it", r.signerVerdict === "Coldcard likely");
+}
+
+{
+	// the survivor's untestable rules must be stated, so survival is not read as evidence
+	const tx = {
+		version: 1,
+		locktime: 0,
+		vin: [p2wpkhInput("d6".repeat(32), 0, 0xffffffff, lowRSig.slice(0, -2) + "81", compressedPk)],
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.01, "0014" + "11".repeat(20))]
+	};
+	const r = analyzeTransaction(tx, null, 960349, 960358);
+
+	check("survivor: a firmware-policy exclusion grades likely", r.signerVerdict === "Coldcard likely");
+	check("survivor: row explains what the grade rests on", r.signals.some((s) => s.label === "Signing device" && /only profiled device that could have signed this/.test(s.implication)));
+	check("survivor: row lists the checks that could not run", r.signals.some((s) => s.label === "Signing device" && /could not test .*fee ceiling/.test(s.implication)));
+	check("survivor: row notes rules that never exclude", r.signals.some((s) => s.label === "Signing device" && /never exclude anything/.test(s.implication)));
 }

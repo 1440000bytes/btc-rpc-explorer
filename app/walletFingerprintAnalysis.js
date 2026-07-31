@@ -473,6 +473,28 @@ function matchCatalog(f) {
 // A signing device only leaves fingerprints in the signatures and in what it refuses
 // to sign, so it is matched on its own facts instead of the wallet catalog. Returns the
 // reason the device is incompatible with this transaction, or null if it is still possible.
+// Rules a signer carries that this transaction could not test, either because they need
+// previous-output data or because the firmware is permissive enough that they never exclude.
+function untestedConstraints(name, f) {
+	const p = CATALOG.signers[name];
+	const gaps = [];
+
+	if (p.input_types && !f.inputTypes) {
+		gaps.push("which input scripts it can spend");
+	}
+	if (p.max_fee_percent != null && f.feePercent == null) {
+		gaps.push("its fee ceiling");
+	}
+	if (p.max_fee_rate_sat_vb != null && f.feeRateSatVb == null) {
+		gaps.push("its fee rate ceiling");
+	}
+	if (p.output_types === "any" && p.op_return_max_pushes == null && p.op_return_max_script_bytes == null) {
+		gaps.push("its output rules, which never exclude anything because the firmware accepts any script");
+	}
+
+	return gaps;
+}
+
 function article(word) {
 	return "aeiou".includes(word.charAt(0)) ? "an" : "a";
 }
@@ -486,62 +508,65 @@ function signerEliminationReason(name, f) {
 		&& (!p.low_r_since_height || !f.referenceHeight || f.referenceHeight >= p.low_r_since_height);
 
 	if (f.lowR === "high" && grinding) {
-		return p.low_r_since_height
-			? `a high-R signature, and it has ground every signature since block ${p.low_r_since_height}`
-			: "a high-R signature, and it grinds every signature";
+		return {
+			rule: "statistical",
+			text: p.low_r_since_height
+				? `a high-R signature, and it has ground every signature since block ${p.low_r_since_height}`
+				: "a high-R signature, and it grinds every signature"
+		};
 	}
 
 	if (f.lowR === "strong_low" && p.low_r === "no") {
-		return "deliberate low-R grinding, which it never does";
+		return { rule: "statistical", text: "deliberate low-R grinding, which it never does" };
 	}
 
 	if (p.input_types && f.inputTypes) {
 		const unsupported = f.inputTypes.filter((t) => t !== "unknown" && !p.input_types.includes(t));
 		if (unsupported.length > 0) {
-			return `${article(unsupported[0])} ${unsupported.join(", ")} input, which its firmware cannot spend`;
+			return { rule: "capability", text: `${article(unsupported[0])} ${unsupported.join(", ")} input, which its firmware cannot spend` };
 		}
 	}
 
 	if (p.output_types && p.output_types !== "any" && f.outputTypes) {
 		const unsupported = f.outputTypes.filter((t) => !p.output_types.includes(t));
 		if (unsupported.length > 0) {
-			return `${article(unsupported[0])} ${unsupported.join(", ")} output, which its firmware cannot pay to`;
+			return { rule: "capability", text: `${article(unsupported[0])} ${unsupported.join(", ")} output, which its firmware cannot pay to` };
 		}
 	}
 
 	for (const o of f.opReturns) {
 		if (p.op_return_max_script_bytes != null && o.scriptBytes > p.op_return_max_script_bytes) {
-			return `an OP_RETURN output of ${o.scriptBytes} script bytes, above the ${p.op_return_max_script_bytes} its firmware accepts`;
+			return { rule: "capability", text: `an OP_RETURN output of ${o.scriptBytes} script bytes, above the ${p.op_return_max_script_bytes} its firmware accepts` };
 		}
 		if (p.op_return_max_pushes != null && o.parsed && o.pushes > p.op_return_max_pushes) {
-			return `an OP_RETURN output carrying ${o.pushes} pushes, and its firmware only ever writes ${p.op_return_max_pushes}`;
+			return { rule: "capability", text: `an OP_RETURN output carrying ${o.pushes} pushes, and its firmware only ever writes ${p.op_return_max_pushes}` };
 		}
 		if (p.op_return_pushdata2 === false && o.pushdata2) {
-			return "an OP_RETURN output using OP_PUSHDATA2 or OP_PUSHDATA4, which its firmware rejects";
+			return { rule: "capability", text: "an OP_RETURN output using OP_PUSHDATA2 or OP_PUSHDATA4, which its firmware rejects" };
 		}
 		if (p.op_return_nonzero_value === false && o.valueSat > 0) {
-			return "an OP_RETURN output carrying value, and its firmware requires a zero amount";
+			return { rule: "capability", text: "an OP_RETURN output carrying value, and its firmware requires a zero amount" };
 		}
 	}
 
 	if (p.max_fee_percent != null && f.feePercent != null && f.feePercent >= p.max_fee_percent) {
-		return `a fee worth ${f.feePercent.toFixed(1)} percent of the outputs, at or above the ${p.max_fee_percent} percent its firmware refuses to sign`;
+		return { rule: "capability", text: `a fee worth ${f.feePercent.toFixed(1)} percent of the outputs, at or above the ${p.max_fee_percent} percent its firmware refuses to sign` };
 	}
 
 	if (p.max_fee_rate_sat_vb != null && f.feeRateSatVb != null && f.feeRateSatVb > p.max_fee_rate_sat_vb) {
-		return `a fee rate of ${Math.round(f.feeRateSatVb)} sat/vB, above the ${p.max_fee_rate_sat_vb} its firmware refuses to sign`;
+		return { rule: "capability", text: `a fee rate of ${Math.round(f.feeRateSatVb)} sat/vB, above the ${p.max_fee_rate_sat_vb} its firmware refuses to sign` };
 	}
 
 	if (f.uncompressedOutsideP2pk && p.uncompressed_keys !== "yes") {
-		return p.uncompressed_keys === "p2pk_only"
+		return { rule: "capability", text: p.uncompressed_keys === "p2pk_only"
 			? "an uncompressed public key outside a P2PK input"
-			: "an uncompressed public key, which it never signs for";
+			: "an uncompressed public key, which it never signs for" };
 	}
 
 	if (p.sighash && f.sighashes.length > 0) {
 		const refused = f.sighashes.filter((s) => !p.sighash.includes(s));
 		if (refused.length > 0) {
-			return refused.join(", ") + ", which it will not sign with default settings";
+			return { rule: "capability", text: refused.join(", ") + ", which it will not sign with default settings" };
 		}
 	}
 
@@ -550,6 +575,18 @@ function signerEliminationReason(name, f) {
 
 function matchSigners(f) {
 	return SIGNERS.filter((name) => signerEliminationReason(name, f) === null);
+}
+
+// A device is "likely" only when every other profiled device is excluded by a firmware
+// capability or policy, which the device would refuse outright. Exclusions that rest on
+// signature statistics (grinding) are weaker, because coordinator software grinds too.
+function signerStrength(candidates, eliminated, f) {
+	if (candidates.length !== 1) {
+		return "possible";
+	}
+
+	const allCapability = eliminated.every((name) => signerEliminationReason(name, f).rule === "capability");
+	return allCapability ? "likely" : "possible";
 }
 
 function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, extraSignatures) {
@@ -787,19 +824,32 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 
 	if (signersEliminated.length > 0) {
 		const preface = "A signing device does not build the transaction, so it is matched only on the signatures and on what it refuses to sign. ";
-		const because = "Ruled out by " + signersEliminated.map((name) => `${name}: ${signerEliminationReason(name, facts)}`).join("; ") + ".";
+		const because = "Ruled out by " + signersEliminated.map((name) => `${name}: ${signerEliminationReason(name, facts).text}`).join("; ") + ".";
 
+		let tail = "";
 		if (signerCandidates.length === 0) {
-			signerVerdict = "Ruled out: " + SIGNERS.join(", ");
+			signerVerdict = signersEliminated.join(", ") + " ruled out";
 			signerVerdictClass = "secondary";
-			add("Signing device", signerVerdict, preface + because, null);
 		} else {
-			signerVerdict = signerCandidates.join(", ") + " not ruled out";
-			signerVerdictClass = "info";
-			add("Signing device", signerVerdict,
-				preface + because + " Still possible: " + signerCandidates.join(", ") + ". This is compatibility and not attribution, since the coordinator software leaves the same signature-level traces and an unprofiled signer could produce them too.",
-				null);
+			const strength = signerStrength(signerCandidates, signersEliminated, facts);
+			signerVerdict = signerCandidates.join(", ") + " " + strength;
+			signerVerdictClass = strength === "likely" ? "success" : "info";
+
+			tail = strength === "likely"
+				? ` Every other profiled device is excluded by a firmware rule it would refuse outright, which leaves ${signerCandidates.join(", ")} as the only profiled device that could have signed this.`
+				: ` That leaves ${signerCandidates.join(", ")}, on exclusions that rest on signature statistics rather than firmware limits, so coordinator software could account for them equally well.`;
+
+			const gaps = signerCandidates
+				.map((name) => ({ name, gaps: untestedConstraints(name, facts) }))
+				.filter((entry) => entry.gaps.length > 0)
+				.map((entry) => `${entry.name} (${entry.gaps.join(", ")})`);
+
+			if (gaps.length > 0) {
+				tail += " This transaction could not test " + gaps.join("; ") + ".";
+			}
 		}
+
+		add("Signing device", signerVerdict, preface + because + tail, null);
 	}
 
 	signals.forEach((s) => { s.reference = REFERENCES[s.label] || null; });
