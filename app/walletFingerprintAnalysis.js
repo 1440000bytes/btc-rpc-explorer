@@ -936,6 +936,48 @@ function analyzeTransaction(tx, txInputs, txBlockHeight, currentBlockHeight, ext
 	};
 }
 
+// The witness script of a P2WSH spend, or the redeem script of a P2SH one, identifies the
+// multisig quorum. Two inputs carrying the same script belong to the same wallet, which lets
+// signatures be pooled across transactions without needing previous-output data.
+function quorumScripts(inputs) {
+	const scripts = new Set();
+
+	for (const input of inputs) {
+		if (input.witness.length >= 3) {
+			const last = input.witness[input.witness.length - 1];
+			if (last && !looksLikeDerSig(last)) {
+				scripts.add(last);
+			}
+			continue;
+		}
+
+		if (input.scriptSigAsm) {
+			const tokens = input.scriptSigAsm.trim().split(/\s+/).filter(Boolean);
+			const last = tokens[tokens.length - 1];
+			if (tokens.length >= 3 && last && !looksLikeDerSig(last.replace(/\[[A-Z|]+\]$/, ""))) {
+				scripts.add(last);
+			}
+		}
+	}
+
+	return scripts;
+}
+
+// Signatures from inputs that belong to the same quorum as the transaction being analyzed.
+function quorumSignatureStats(inputs, scripts) {
+	const matching = inputs.filter((input) => {
+		for (const script of quorumScripts([input])) {
+			if (scripts.has(script)) {
+				return true;
+			}
+		}
+
+		return false;
+	});
+
+	return ecdsaSignatureStats(matching);
+}
+
 async function findSelfChangeParent(tx, txInputs, fetchTxWithInputs, seen) {
 	const start = normalize(tx, txInputs);
 	if (!start.inputs.every((i) => i.type !== "unknown")) {
@@ -997,6 +1039,40 @@ async function gatherLinkedSignatures(startTx, startTxInputs, fetchTxWithInputs,
 		seen.add(parent.tx.txid);
 		curTx = parent.tx;
 		curInputs = parent.txInputs;
+	}
+
+	// Multisig gives a second route that does not need previous-output data: a parent input
+	// carrying the same witness or redeem script is the same quorum, so its signatures come
+	// from the same set of devices and can be pooled.
+	const scripts = quorumScripts(normalize(startTx, startTxInputs).inputs);
+	if (scripts.size > 0) {
+		for (const vin of startTx.vin) {
+			if (result.linkedTxids.length >= maxHops) {
+				break;
+			}
+			if (!vin || vin.coinbase || !vin.txid || seen.has(vin.txid)) {
+				continue;
+			}
+
+			let parent = null;
+			try {
+				parent = await fetchTxWithInputs(vin.txid);
+			} catch (err) {
+				continue;
+			}
+
+			if (!parent || !parent.tx || !parent.tx.vin) {
+				continue;
+			}
+
+			seen.add(vin.txid);
+			const stats = quorumSignatureStats(normalize(parent.tx, parent.txInputs).inputs, scripts);
+			if (stats.examined > 0) {
+				result.low += stats.lowR;
+				result.high += stats.highR;
+				result.linkedTxids.push(parent.tx.txid);
+			}
+		}
 	}
 
 	return result;

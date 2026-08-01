@@ -21,6 +21,7 @@ function out(type, address, valueBtc, hex) {
 }
 
 let pass = 0;
+process.on("exit", () => console.log(`\n${pass} checks passed`));
 function check(name, cond) {
 	assert.ok(cond, name);
 	pass++;
@@ -529,7 +530,6 @@ function check(name, cond) {
 	const none = await gatherLinkedSignatures(startTx, startInputs, null, 4);
 	check("graph walk: no fetcher returns empty", none.linkedTxids.length === 0);
 
-	console.log(`\n${pass} checks passed`);
 })();
 
 {
@@ -685,3 +685,39 @@ function check(name, cond) {
 	check("multisig: signatures in a legacy P2SH scriptSig are counted", r.signals.some((s) => s.label === "Low-R grinding" && /all 6/.test(s.value)));
 	check("multisig: the redeem script is not mistaken for a signature", r.signerVerdict === "Coldcard possible");
 }
+
+(async () => {
+	// multisig quorum pooling: a parent spending the same witness script is the same wallet,
+	// so its signatures join the count without needing previous-output data
+	const wsig = "3044" + "0220" + "aa".repeat(32) + "0220" + "aa".repeat(32) + "01";
+	const hsig = "3045" + "0221" + "bb".repeat(33) + "0220" + "bb".repeat(32) + "01";
+	const quorum = "52" + "21" + "02" + "bb".repeat(32) + "21" + "02" + "cc".repeat(32) + "21" + "02" + "dd".repeat(32) + "53ae";
+	const otherQuorum = "52" + "21" + "02" + "ee".repeat(32) + "21" + "02" + "ff".repeat(32) + "52ae";
+
+	const msIn = (txid, vout, script, sig) => ({ txid, vout, sequence: 0xfffffffd, txinwitness: ["", sig, sig, script], scriptSig: { asm: "" } });
+	const parentTxid = "f1".repeat(32);
+	const strangerTxid = "f2".repeat(32);
+
+	const startTx = { txid: "f0".repeat(32), vin: [msIn(parentTxid, 0, quorum, wsig)], vout: [] };
+	const parentTx = { txid: parentTxid, vin: [msIn("f9".repeat(32), 0, quorum, wsig), msIn("f9".repeat(32), 1, quorum, wsig)], vout: [] };
+
+	const fetcher = async (txid) => (txid === parentTxid ? { tx: parentTx, txInputs: null } : null);
+	const r = await gatherLinkedSignatures(startTx, null, fetcher, 4);
+
+	check("quorum: a same-script parent is pooled without prevout data", r.linkedTxids.includes(parentTxid));
+	check("quorum: its signatures are counted", r.low === 4 && r.high === 0);
+
+	// a parent from a different quorum must not be pooled
+	const strangerTx = { txid: strangerTxid, vin: [msIn("f8".repeat(32), 0, otherQuorum, wsig)], vout: [] };
+	const startTx2 = { txid: "f3".repeat(32), vin: [msIn(strangerTxid, 0, quorum, wsig)], vout: [] };
+	const r2 = await gatherLinkedSignatures(startTx2, null, async (t) => (t === strangerTxid ? { tx: strangerTx, txInputs: null } : null), 4);
+
+	check("quorum: a different wallet's transaction is not pooled", r2.linkedTxids.length === 0 && r2.low === 0);
+
+	// a high-R signature in the pool must count against the grinders, not be dropped
+	const parentHigh = { txid: parentTxid, vin: [msIn("f7".repeat(32), 0, quorum, hsig)], vout: [] };
+	const r3 = await gatherLinkedSignatures(startTx, null, async (t) => (t === parentTxid ? { tx: parentHigh, txInputs: null } : null), 4);
+
+	check("quorum: pooled high-R signatures are counted too", r3.high === 2 && r3.low === 0);
+
+})();
