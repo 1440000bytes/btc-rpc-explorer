@@ -646,3 +646,42 @@ function check(name, cond) {
 	check("edge: a taproot input still excludes the stock Coldcard", !r.signerCandidates.includes("Coldcard"));
 	check("edge: the exclusion names the EDGE firmware caveat", r.signals.some((s) => s.label === "Signing device" && /EDGE build adds taproot spending/.test(s.implication)));
 }
+
+{
+	// P2WSH 2-of-3 multisig: signatures sit in the witness stack alongside the script
+	const wsig = "3044" + "0220" + "aa".repeat(32) + "0220" + "aa".repeat(32) + "01";
+	const witnessScript = "52" + "21" + "02" + "bb".repeat(32) + "21" + "02" + "cc".repeat(32) + "21" + "02" + "dd".repeat(32) + "53ae";
+	const tx = {
+		version: 2,
+		locktime: 840000,
+		vin: Array.from({ length: 3 }, (_, i) => ({
+			txid: "e1".repeat(32), vout: i, sequence: 0xfffffffd,
+			txinwitness: ["", wsig, wsig, witnessScript], scriptSig: { asm: "" }
+		})),
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.05, "0014" + "11".repeat(20))]
+	};
+	const r = analyzeTransaction(tx, null, 840001, 840002);
+
+	check("multisig: signatures in a P2WSH witness are counted", r.signals.some((s) => s.label === "Low-R grinding" && /all 6/.test(s.value)));
+	check("multisig: the witness script is not mistaken for a signature", !/all 9/.test(JSON.stringify(r.signals)));
+	check("multisig: grinding eliminates the non-grinding devices", r.signerVerdict === "Coldcard possible");
+}
+
+{
+	// P2SH legacy multisig: Bitcoin Core's asm strips the sighash byte and annotates it
+	const bare = "3044" + "0220" + "aa".repeat(32) + "0220" + "aa".repeat(32);
+	const redeem = "52" + "21" + "02" + "bb".repeat(32) + "21" + "02" + "cc".repeat(32) + "52ae";
+	const tx = {
+		version: 2,
+		locktime: 840000,
+		vin: Array.from({ length: 3 }, (_, i) => ({
+			txid: "e2".repeat(32), vout: i, sequence: 0xfffffffd, txinwitness: [],
+			scriptSig: { asm: `0 ${bare}[ALL] ${bare}[ALL] ${redeem}` }
+		})),
+		vout: [out("witness_v0_keyhash", "bc1qx", 0.05, "0014" + "11".repeat(20))]
+	};
+	const r = analyzeTransaction(tx, null, 840001, 840002);
+
+	check("multisig: signatures in a legacy P2SH scriptSig are counted", r.signals.some((s) => s.label === "Low-R grinding" && /all 6/.test(s.value)));
+	check("multisig: the redeem script is not mistaken for a signature", r.signerVerdict === "Coldcard possible");
+}

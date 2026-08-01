@@ -120,6 +120,55 @@ function sigAndPubkeyHex(input) {
 	return { sig: null, pubkey: null };
 }
 
+// A DER signature as it appears on chain: 0x30, a length that matches the remaining bytes,
+// and a trailing sighash byte. Checking the length guards against mistaking a redeem script
+// or witness script that happens to start with 0x30 for a signature.
+function looksLikeDerSig(hex) {
+	if (!hex || hex.length < 16 || hex.substring(0, 2) !== "30" || /[^0-9a-fA-F]/.test(hex)) {
+		return false;
+	}
+
+	const declared = parseInt(hex.substring(2, 4), 16);
+	if (isNaN(declared)) {
+		return false;
+	}
+
+	// Witness items carry the trailing sighash byte; Bitcoin Core's scriptSig asm strips it
+	// and renders it separately as "[ALL]", so the bare form is two bytes shorter.
+	if ((declared + 2) * 2 === hex.length) {
+		return true;
+	}
+
+	if ((declared + 3) * 2 !== hex.length) {
+		return false;
+	}
+
+	return [0x01, 0x02, 0x03, 0x81, 0x82, 0x83].includes(parseInt(hex.substring(hex.length - 2), 16));
+}
+
+// Every ECDSA signature in an input, whatever the script shape. Single-key spends carry one;
+// multisig carries m of them, in the witness stack for P2WSH or in the scriptSig for P2SH.
+function allSignatures(input) {
+	const sigs = [];
+
+	for (const item of input.witness) {
+		if (looksLikeDerSig(item)) {
+			sigs.push(item);
+		}
+	}
+
+	if (sigs.length === 0 && input.scriptSigAsm) {
+		for (const token of input.scriptSigAsm.trim().split(/\s+/)) {
+			const hex = token.replace(/\[[A-Z|]+\]$/, "");
+			if (looksLikeDerSig(hex)) {
+				sigs.push(hex);
+			}
+		}
+	}
+
+	return sigs;
+}
+
 const SIGHASH_NAMES = {
 	0x01: "SIGHASH_ALL",
 	0x02: "SIGHASH_NONE",
@@ -163,6 +212,12 @@ function sighashOf(input) {
 		if (m) {
 			return "SIGHASH_" + m[1];
 		}
+	}
+
+	// Multisig and other multi-element witnesses: read the flag off the signatures themselves
+	const sigs = allSignatures(input);
+	if (sigs.length > 0) {
+		return sighashName(parseInt(sigs[0].substring(sigs[0].length - 2), 16));
 	}
 
 	return null;
@@ -272,8 +327,7 @@ function ecdsaSignatureStats(inputs) {
 	let highR = 0;
 
 	for (const input of inputs) {
-		const { sig } = sigAndPubkeyHex(input);
-		if (sig && sig.length >= 8 && sig.substring(0, 2) === "30") {
+		for (const sig of allSignatures(input)) {
 			const rLen = parseInt(sig.substring(6, 8), 16);
 			if (isNaN(rLen)) {
 				continue;
